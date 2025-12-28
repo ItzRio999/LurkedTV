@@ -297,7 +297,7 @@ class SeriesPage {
             card.innerHTML = `
                 <div class="series-poster">
                     <img src="${poster}" alt="${series.name}" 
-                         onerror="this.src='/img/placeholder.png'" loading="lazy">
+                         onerror="this.onerror=null;this.src='/img/placeholder.png'" loading="lazy">
                     <div class="series-play-overlay">
                         <span class="play-icon">▶</span>
                     </div>

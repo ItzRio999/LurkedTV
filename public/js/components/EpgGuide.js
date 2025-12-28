@@ -449,7 +449,7 @@ class EpgGuide {
               ${isFavorite ? '❤️' : '♡'}
             </button>
             <img class="epg-channel-logo" src="${logo}" 
-                 alt="" onerror="this.src='/img/placeholder.png'">
+                 alt="" onerror="this.onerror=null;this.src='/img/placeholder.png'">
             <span class="epg-channel-name">${name}</span>
             <div class="resize-handle"></div>
           </div>

@@ -287,7 +287,7 @@ class MoviesPage {
             card.innerHTML = `
                 <div class="movie-poster">
                     <img src="${poster}" alt="${movie.name}" 
-                         onerror="this.src='/img/placeholder.png'" loading="lazy">
+                         onerror="this.onerror=null;this.src='/img/placeholder.png'" loading="lazy">
                     <div class="movie-play-overlay">
                         <span class="play-icon">▶</span>
                     </div>

@@ -293,8 +293,8 @@ class ChannelList {
                data-source-type="${channel.sourceType}"
                data-stream-id="${channel.streamId || ''}"
                data-url="${channel.url || ''}">
-            <img class="channel-logo" src="${channel.tvgLogo || '/img/placeholder.png'}" 
-                 alt="" onerror="this.src='/img/placeholder.png'">
+            <img class="channel-logo" src="${channel.tvgLogo && channel.tvgLogo.length > 0 ? channel.tvgLogo : '/img/placeholder.png'}" 
+                 alt="" onerror="this.onerror=null;this.src='/img/placeholder.png'">
             <div class="channel-info">
               <div class="channel-name">${this.escapeHtml(channel.name)}</div>
               <div class="channel-program">${this.escapeHtml(this.getProgramInfo(channel) || '')}</div>
@@ -741,8 +741,8 @@ class ChannelList {
         div.dataset.url = channel.url || '';
 
         div.innerHTML = `
-            <img class="channel-logo" src="${channel.tvgLogo || '/img/placeholder.png'}" 
-                 alt="" onerror="this.src='/img/placeholder.png'">
+            <img class="channel-logo" src="${channel.tvgLogo && channel.tvgLogo.length > 0 ? channel.tvgLogo : '/img/placeholder.png'}" 
+                 alt="" onerror="this.onerror=null;this.src='/img/placeholder.png'">
             <div class="channel-info">
               <div class="channel-name">${this.escapeHtml(channel.name)}</div>
               <div class="channel-program">${this.getProgramInfo(channel) || ''}</div>
