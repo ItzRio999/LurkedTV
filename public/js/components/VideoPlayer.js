@@ -209,8 +209,13 @@ class VideoPlayer {
             this.isUsingProxy = needsProxy;
             const finalUrl = needsProxy ? this.getProxiedUrl(streamUrl) : streamUrl;
 
-            // Priority 1: Use HLS.js for all browsers that support it (Chrome, Firefox, Edge, etc.)
-            if (Hls.isSupported()) {
+            // Detect if this is likely an HLS stream (vs direct video file like MP4)
+            const looksLikeHls = finalUrl.includes('.m3u8') ||
+                finalUrl.includes('m3u8') ||
+                (!finalUrl.includes('.mp4') && !finalUrl.includes('.mkv') && !finalUrl.includes('.avi'));
+
+            // Priority 1: Use HLS.js for HLS streams on browsers that support it
+            if (looksLikeHls && Hls.isSupported()) {
                 this.hls = new Hls(this.getHlsConfig());
                 this.hls.loadSource(finalUrl);
                 this.hls.attachMedia(this.video);
