@@ -33,7 +33,8 @@ class VideoPlayer {
             rememberVolume: true, // Persist volume between sessions
             lastVolume: 80, // Last used volume (if rememberVolume is true)
             autoPlayNextEpisode: false, // Auto-play next episode in series
-            forceProxy: false // Force all streams through backend proxy
+            forceProxy: false, // Force all streams through backend proxy
+            forceTranscode: false // Force audio transcoding (fixes Dolby/AC3 audio)
         };
         try {
             const saved = localStorage.getItem('nodecast_tv_player_settings');
@@ -201,6 +202,25 @@ class VideoPlayer {
 
             // Determine if HLS or direct stream
             this.currentUrl = streamUrl;
+
+            // CHECK: Force Transcode Priority - transcoded streams bypass HLS.js
+            if (this.settings.forceTranscode) {
+                console.log('[Player] Force Transcode enabled. Routing through ffmpeg...');
+                const transcodeUrl = this.getTranscodeUrl(streamUrl);
+                this.currentUrl = transcodeUrl;
+
+                // Transcoded streams are fragmented MP4 - play directly with <video> element
+                console.log('[Player] Playing transcoded stream directly:', transcodeUrl);
+                this.video.src = transcodeUrl;
+                this.video.play().catch(e => console.log('[Player] Autoplay prevented:', e));
+
+                // Update UI and dispatch events
+                this.updateNowPlaying(channel);
+                this.showNowPlayingOverlay();
+                this.fetchEpgData(channel);
+                window.dispatchEvent(new CustomEvent('channelChanged', { detail: channel }));
+                return; // Exit early - don't use HLS.js path
+            }
 
             // Proactively use proxy for:
             // 1. User enabled "Force Proxy" in settings
@@ -375,6 +395,13 @@ class VideoPlayer {
      */
     getProxiedUrl(url) {
         return `/api/proxy/stream?url=${encodeURIComponent(url)}`;
+    }
+
+    /**
+     * Get transcoded URL for a stream (audio transcoding for browser compatibility)
+     */
+    getTranscodeUrl(url) {
+        return `/api/transcode?url=${encodeURIComponent(url)}`;
     }
 
     /**

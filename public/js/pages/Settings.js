@@ -29,6 +29,7 @@ class SettingsPage {
         const rememberVolumeToggle = document.getElementById('setting-remember-volume');
         const autoPlayNextToggle = document.getElementById('setting-autoplay-next');
         const forceProxyToggle = document.getElementById('setting-force-proxy');
+        const forceTranscodeToggle = document.getElementById('setting-force-transcode');
 
         // Load current settings
         if (this.app.player?.settings) {
@@ -40,6 +41,9 @@ class SettingsPage {
             autoPlayNextToggle.checked = this.app.player.settings.autoPlayNextEpisode;
             if (forceProxyToggle) {
                 forceProxyToggle.checked = this.app.player.settings.forceProxy || false;
+            }
+            if (forceTranscodeToggle) {
+                forceTranscodeToggle.checked = this.app.player.settings.forceTranscode || false;
             }
         }
 
@@ -80,6 +84,12 @@ class SettingsPage {
         // Force proxy toggle
         forceProxyToggle?.addEventListener('change', () => {
             this.app.player.settings.forceProxy = forceProxyToggle.checked;
+            this.app.player.saveSettings();
+        });
+
+        // Force transcode toggle
+        forceTranscodeToggle?.addEventListener('change', () => {
+            this.app.player.settings.forceTranscode = forceTranscodeToggle.checked;
             this.app.player.saveSettings();
         });
 

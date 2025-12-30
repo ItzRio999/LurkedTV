@@ -344,6 +344,17 @@
                 </div>
               </div>
               <div class="setting-item">
+                <label class="setting-toggle">
+                  <input type="checkbox" id="setting-force-transcode">
+                  <span class="toggle-slider"></span>
+                </label>
+                <div class="setting-info">
+                  <span class="setting-label">Force Audio Transcode</span>
+                  <span class="setting-hint">Transcode audio to AAC for browser compatibility. Enable if you get video
+                    but no audio (fixes Dolby/AC3/EAC3). Requires ffmpeg-static.</span>
+                </div>
+              </div>
+              <div class="setting-item">
                 <div class="setting-info" style="flex: 1;">
                   <span class="setting-label">Stream Output Format</span>
                   <span class="setting-hint">Container format for Xtream streams. Try TS if you experience buffering
