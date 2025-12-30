@@ -157,14 +157,15 @@ If you're running NodeCast TV behind a reverse proxy (Nginx, Caddy, Traefik) wit
 | Symptom | Likely Cause | Solution |
 |---------|--------------|----------|
 | Streams fail with `fragLoadError` | Mixed content (HTTPS page loading HTTP streams) | Enable **"Force Backend Proxy"** in Settings → Streaming |
-| Channel icons don't load | Mixed content on images | Icons are loaded directly; no fix yet for HTTP icons on HTTPS |
-| Streams work on HTTP but not HTTPS | Reverse proxy not passing streams correctly | Ensure your proxy config supports streaming (disable buffering) |
+| Channel icons don't load | Mixed content on images | Icons are now automatically proxied on HTTPS - update to latest version |
+| Streams work on HTTP but not HTTPS | Reverse proxy not passing headers correctly | Ensure `X-Forwarded-Proto` header is set (see examples below) |
 
 **Caddy example:**
 ```
 tv.domain.com {
     reverse_proxy nodecast:3000 {
         flush_interval -1
+        header_up X-Forwarded-Proto {scheme}
     }
 }
 ```
@@ -176,9 +177,10 @@ location / {
     proxy_buffering off;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
-
 
 ### TVHeadend
 

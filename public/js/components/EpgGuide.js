@@ -34,6 +34,19 @@ class EpgGuide {
         this.init();
     }
 
+    /**
+     * Get proxied image URL to avoid mixed content errors on HTTPS
+     * Only proxies HTTP URLs when on HTTPS page
+     */
+    getProxiedImageUrl(url) {
+        if (!url || url.length === 0) return '/img/placeholder.png';
+        // Only proxy if we're on HTTPS and the image is HTTP
+        if (window.location.protocol === 'https:' && url.startsWith('http://')) {
+            return `/api/proxy/image?url=${encodeURIComponent(url)}`;
+        }
+        return url;
+    }
+
     init() {
         this.prevBtn.addEventListener('click', () => this.navigate(-2));
         this.nextBtn.addEventListener('click', () => this.navigate(2));
@@ -440,7 +453,7 @@ class EpgGuide {
             }
 
             // Fallback values if EPG channel is missing
-            const logo = sourceChannel.tvgLogo || (epgChannel && epgChannel.icon) || '/img/placeholder.png';
+            const logo = this.getProxiedImageUrl(sourceChannel.tvgLogo || (epgChannel && epgChannel.icon));
             const name = sourceChannel.name || (epgChannel && epgChannel.name);
 
             html += `

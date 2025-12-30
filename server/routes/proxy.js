@@ -397,4 +397,42 @@ router.get('/stream', async (req, res) => {
     }
 });
 
+/**
+ * Proxy images (channel logos, posters)
+ * Fixes mixed content errors when loading HTTP images on HTTPS pages
+ * GET /api/proxy/image?url=...
+ */
+router.get('/image', async (req, res) => {
+    try {
+        const { url } = req.query;
+        if (!url) {
+            return res.status(400).json({ error: 'URL required' });
+        }
+
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/*,*/*;q=0.8'
+            }
+        });
+
+        if (!response.ok) {
+            return res.status(response.status).send('Failed to fetch image');
+        }
+
+        // Forward content type
+        const contentType = response.headers.get('content-type') || 'image/png';
+        res.set('Content-Type', contentType);
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+
+        // Pipe the image data
+        const buffer = await response.arrayBuffer();
+        res.send(Buffer.from(buffer));
+    } catch (err) {
+        console.error('Image proxy error:', err.message);
+        res.status(500).send('Image proxy error');
+    }
+});
+
 module.exports = router;

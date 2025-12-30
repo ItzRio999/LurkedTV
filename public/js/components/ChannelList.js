@@ -28,6 +28,19 @@ class ChannelList {
     }
 
     /**
+     * Get proxied image URL to avoid mixed content errors on HTTPS
+     * Only proxies HTTP URLs when on HTTPS page
+     */
+    getProxiedImageUrl(url) {
+        if (!url || url.length === 0) return '/img/placeholder.png';
+        // Only proxy if we're on HTTPS and the image is HTTP
+        if (window.location.protocol === 'https:' && url.startsWith('http://')) {
+            return `/api/proxy/image?url=${encodeURIComponent(url)}`;
+        }
+        return url;
+    }
+
+    /**
      * Load collapsed state from localStorage
      */
     loadCollapsedState() {
@@ -399,7 +412,7 @@ class ChannelList {
                data-stream-id="${channel.streamId || ''}"
                data-url="${channel.url || ''}"
                data-render-id="${renderId}">
-            <img class="channel-logo" src="${channel.tvgLogo && channel.tvgLogo.length > 0 ? channel.tvgLogo : '/img/placeholder.png'}" 
+            <img class="channel-logo" src="${this.getProxiedImageUrl(channel.tvgLogo)}" 
                  alt="" onerror="this.onerror=null;this.src='/img/placeholder.png'">
             <div class="channel-info">
               <div class="channel-name">${this.escapeHtml(channel.name)}</div>
@@ -851,7 +864,7 @@ class ChannelList {
         div.dataset.url = channel.url || '';
 
         div.innerHTML = `
-            <img class="channel-logo" src="${channel.tvgLogo && channel.tvgLogo.length > 0 ? channel.tvgLogo : '/img/placeholder.png'}" 
+            <img class="channel-logo" src="${this.getProxiedImageUrl(channel.tvgLogo)}" 
                  alt="" onerror="this.onerror=null;this.src='/img/placeholder.png'">
             <div class="channel-info">
               <div class="channel-name">${this.escapeHtml(channel.name)}</div>
@@ -1102,7 +1115,7 @@ class ChannelList {
         modalBody.innerHTML = `
             <div class="epg-info-modal">
                 <div class="channel-details">
-                    <img class="channel-logo" src="${channel.tvgLogo || '/img/placeholder.png'}" 
+                    <img class="channel-logo" src="${this.getProxiedImageUrl(channel.tvgLogo)}" 
                          onerror="this.onerror=null;this.src='/img/placeholder.png'" />
                     <div class="channel-meta">
                         <p><strong>Group:</strong> ${this.escapeHtml(channel.groupTitle || 'Uncategorized')}</p>
