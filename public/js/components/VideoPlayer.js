@@ -386,23 +386,17 @@ class VideoPlayer {
                     }
                 });
 
-                // Detect discontinuity changes (ad transitions) and help decoder reset
+                // Detect discontinuity changes (ad transitions) for logging only
                 this.lastDiscontinuity = -1;
                 this.hls.on(Hls.Events.FRAG_CHANGED, (event, data) => {
                     const frag = data.frag;
                     if (frag && frag.sn !== 'initSegment') {
-                        // Check if we crossed a discontinuity boundary using CC (Continuity Counter)
+                        // Log discontinuity changes for debugging
                         if (frag.cc !== undefined && frag.cc !== this.lastDiscontinuity) {
-                            const wasFirstDetection = this.lastDiscontinuity === -1;
                             console.log(`[HLS] Discontinuity detected: CC ${this.lastDiscontinuity} -> ${frag.cc}`);
                             this.lastDiscontinuity = frag.cc;
-
-                            // Skip on first detection (initial load)
-                            if (!wasFirstDetection && !this.video.paused && this.video.currentTime > 0) {
-                                // Seek forward slightly to skip past any corrupted audio frames
-                                console.log('[HLS] Seeking past discontinuity boundary');
-                                this.video.currentTime += 1;
-                            }
+                            // Note: maxAudioFramesDrift: 4 handles audio sync naturally
+                            // No manual seeking needed - it can cause more issues than it solves
                         }
                     }
                 });
