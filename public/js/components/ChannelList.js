@@ -163,6 +163,57 @@ class ChannelList {
                 this.renderNextBatch();
             }
         }, { rootMargin: '100px' });
+
+        // Start EPG refresh timer (updates visible program info every 60 seconds)
+        this.startEpgRefreshTimer();
+    }
+
+    /**
+     * Start timer to refresh EPG info in visible channel items
+     * Updates every 60 seconds to keep "Now Playing" program info current
+     */
+    startEpgRefreshTimer() {
+        // Clear any existing timer
+        if (this._epgRefreshTimer) {
+            clearInterval(this._epgRefreshTimer);
+        }
+
+        // Refresh every 60 seconds
+        this._epgRefreshTimer = setInterval(() => {
+            this.updateVisibleEpgInfo();
+        }, 60000);
+    }
+
+    /**
+     * Update EPG info for visible channel items without full re-render
+     * Only updates the program text, not the entire channel item
+     */
+    updateVisibleEpgInfo() {
+        if (!window.app || !window.app.epgGuide) return;
+
+        // Clear the cache so we get fresh data
+        this.clearProgramInfoCache();
+
+        // Find all visible channel items and update their program info
+        const channelItems = this.container.querySelectorAll('.channel-item');
+        channelItems.forEach(item => {
+            const channelId = item.dataset.channelId;
+            const sourceId = item.dataset.sourceId;
+
+            // Find the channel data
+            const channel = this.channels.find(c =>
+                String(c.id) === String(channelId) &&
+                String(c.sourceId) === String(sourceId)
+            );
+
+            if (channel) {
+                const programInfo = this.getProgramInfo(channel);
+                const programElement = item.querySelector('.channel-program');
+                if (programElement) {
+                    programElement.textContent = programInfo || '';
+                }
+            }
+        });
     }
 
     // ... (loadSources, loadChannels, loadAllChannels, loadXtreamChannels, loadM3uChannels, loadHiddenItems, isHidden, loadFavorites, isFavorite, toggleFavorite methods remain same)
