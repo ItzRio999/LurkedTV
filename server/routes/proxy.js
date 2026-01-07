@@ -14,6 +14,9 @@ const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 const { Readable } = require('stream');
 
+// Default cache max age in hours
+const DEFAULT_MAX_AGE_HOURS = 24;
+
 // Helper to get formatted category list from DB
 function getCategoriesFromDb(sourceId, type, includeHidden = false) {
     const db = getDb();
@@ -678,12 +681,12 @@ router.get('/stream', async (req, res) => {
 
             const contentType = response.headers.get('content-type') || '';
             res.set('Access-Control-Allow-Origin', '*');
-            
+
             // Forward range-related headers for video seeking support
             const contentLength = response.headers.get('content-length');
             const contentRange = response.headers.get('content-range');
             const acceptRanges = response.headers.get('accept-ranges');
-            
+
             if (contentLength) {
                 res.set('Content-Length', contentLength);
             }
@@ -697,7 +700,7 @@ router.get('/stream', async (req, res) => {
                 // we can safely assume it supports byte ranges
                 res.set('Accept-Ranges', 'bytes');
             }
-            
+
             // Set status code (206 for partial content when range request was made)
             res.status(response.status);
 
