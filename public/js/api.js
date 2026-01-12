@@ -138,16 +138,6 @@ const API = {
                 API.request('GET', `/proxy/xtream/${sourceId}/stream/${streamId}/${type}?container=${container}`)
         },
 
-        // M3U
-        m3u: {
-            get: (sourceId, options = {}) => {
-                const params = [];
-                if (options.includeHidden) params.push('includeHidden=true');
-                const query = params.length ? `?${params.join('&')}` : '';
-                return API.request('GET', `/proxy/m3u/${sourceId}${query}`);
-            }
-        },
-
         // EPG
         epg: {
             get: (sourceId) => API.request('GET', `/proxy/epg/${sourceId}`),

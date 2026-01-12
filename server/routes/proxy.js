@@ -3,7 +3,6 @@ const router = express.Router();
 const { sources } = require('../db');
 const { getDb } = require('../db/sqlite'); // Import SQLite
 const xtreamApi = require('../services/xtreamApi');
-const m3uParser = require('../services/m3uParser');
 const epgParser = require('../services/epgParser');
 const cache = require('../services/cache');
 const path = require('path');
@@ -490,42 +489,6 @@ router.get('/xtream/:sourceId/stream/:streamId/:type?', async (req, res) => {
         res.json({ url });
     } catch (err) {
         console.error('Stream URL error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-/**
- * Fetch and parse M3U playlist
- * GET /api/proxy/m3u/:sourceId
- */
-router.get('/m3u/:sourceId', async (req, res) => {
-    try {
-        const sourceId = req.params.sourceId;
-        const source = await sources.getById(sourceId);
-        if (!source || source.type !== 'm3u') {
-            return res.status(404).json({ error: 'M3U source not found' });
-        }
-
-        const forceRefresh = req.query.refresh === '1';
-        const maxAgeHours = parseInt(req.query.maxAge) || DEFAULT_MAX_AGE_HOURS;
-        const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
-
-        // Check cache
-        if (!forceRefresh) {
-            const cached = cache.get('m3u', sourceId, 'playlist', maxAgeMs);
-            if (cached) {
-                return res.json(cached);
-            }
-        }
-
-        const data = await m3uParser.fetchAndParse(source.url);
-
-        // Store in cache
-        cache.set('m3u', sourceId, 'playlist', data);
-
-        res.json(data);
-    } catch (err) {
-        console.error('M3U proxy error:', err);
         res.status(500).json({ error: err.message });
     }
 });
