@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { spawn } = require('child_process');
+const db = require('../db');
 
 /**
  * Transcode stream
@@ -9,14 +10,20 @@ const { spawn } = require('child_process');
  * Transcodes audio to AAC for browser compatibility while passing video through.
  * This fixes playback issues with Dolby/AC3/EAC3 audio that browsers can't decode.
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     const { url } = req.query;
     if (!url) {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
 
     const ffmpegPath = req.app.locals.ffmpegPath || 'ffmpeg';
+
+    // Get User-Agent from settings
+    const settings = await db.settings.get();
+    const userAgent = db.getUserAgent(settings);
+
     console.log(`[Transcode] Starting transcoding for: ${url}`);
+    console.log(`[Transcode] Using User-Agent: ${settings.userAgentPreset}`);
     console.log(`[Transcode] Using binary: ${ffmpegPath}`);
 
     // FFmpeg arguments for transcoding
@@ -25,7 +32,7 @@ router.get('/', (req, res) => {
     const args = [
         '-hide_banner',
         '-loglevel', 'warning',
-        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        '-user_agent', userAgent,
         // Faster startup - reduced probe/analyze for quicker first bytes
         '-probesize', '2000000', // 2MB (reduced from 5MB)
         '-analyzeduration', '3000000', // 3 seconds (reduced from 10s)
@@ -39,6 +46,8 @@ router.get('/', (req, res) => {
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '3',
+        // Prevent Range/HEAD requests that some providers reject with 405
+        '-seekable', '0',
         '-i', url,
         // Map only first video and audio stream (avoid subtitle streams causing issues)
         '-map', '0:v:0',

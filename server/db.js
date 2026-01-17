@@ -67,8 +67,28 @@ function getDefaultSettings() {
     forceRemux: false,
     autoTranscode: true,
     streamFormat: 'm3u8',
-    epgRefreshInterval: '24'
+    epgRefreshInterval: '24',
+    // User-Agent settings
+    userAgentPreset: 'chrome',    // chrome | vlc | tivimate | custom
+    userAgentCustom: '',          // Custom UA string when preset is 'custom'
+    // Probe cache settings  
+    probeCacheTTL: 300,           // 5 minutes for URL probe cache
+    seriesProbeCacheDays: 7       // 7 days for series episode probe cache
   };
+}
+
+// User-Agent presets
+const USER_AGENT_PRESETS = {
+  chrome: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  vlc: 'VLC/3.0.20 LibVLC/3.0.20',
+  tivimate: 'TiviMate/4.7.0',
+};
+
+function getUserAgent(settings) {
+  if (settings.userAgentPreset === 'custom' && settings.userAgentCustom) {
+    return settings.userAgentCustom;
+  }
+  return USER_AGENT_PRESETS[settings.userAgentPreset] || USER_AGENT_PRESETS.chrome;
 }
 
 // Write lock to prevent concurrent writes from corrupting db.json
@@ -422,4 +442,4 @@ const users = {
   }
 };
 
-module.exports = { loadDb, saveDb, sources, hiddenItems, favorites, settings, users, getDefaultSettings };
+module.exports = { loadDb, saveDb, sources, hiddenItems, favorites, settings, users, getDefaultSettings, getUserAgent, USER_AGENT_PRESETS };

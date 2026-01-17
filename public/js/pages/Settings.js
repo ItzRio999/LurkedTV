@@ -145,6 +145,39 @@ class SettingsPage {
                 this.app.player.saveSettings();
             });
         }
+
+        // User-Agent preset
+        const userAgentSelect = document.getElementById('setting-user-agent');
+        const userAgentCustomInput = document.getElementById('setting-user-agent-custom');
+        const customUaContainer = document.getElementById('custom-user-agent-container');
+
+        if (userAgentSelect && this.app.player?.settings) {
+            // Load saved values
+            userAgentSelect.value = this.app.player.settings.userAgentPreset || 'chrome';
+            if (userAgentCustomInput) {
+                userAgentCustomInput.value = this.app.player.settings.userAgentCustom || '';
+            }
+
+            // Show/hide custom input
+            const toggleCustomInput = () => {
+                if (customUaContainer) {
+                    customUaContainer.style.display = userAgentSelect.value === 'custom' ? 'flex' : 'none';
+                }
+            };
+            toggleCustomInput();
+
+            // Save on change
+            userAgentSelect.addEventListener('change', () => {
+                this.app.player.settings.userAgentPreset = userAgentSelect.value;
+                this.app.player.saveSettings();
+                toggleCustomInput();
+            });
+
+            userAgentCustomInput?.addEventListener('change', () => {
+                this.app.player.settings.userAgentCustom = userAgentCustomInput.value;
+                this.app.player.saveSettings();
+            });
+        }
     }
 
     initUserManagement() {
@@ -297,6 +330,18 @@ class SettingsPage {
             if (autoTranscodeToggle) autoTranscodeToggle.checked = s.autoTranscode || false;
             if (epgRefreshSelect) epgRefreshSelect.value = s.epgRefreshInterval || '24';
             if (streamFormatSelect) streamFormatSelect.value = s.streamFormat || 'm3u8';
+
+            // User-Agent settings
+            const userAgentSelect = document.getElementById('setting-user-agent');
+            const userAgentCustomInput = document.getElementById('setting-user-agent-custom');
+            const customUaContainer = document.getElementById('custom-user-agent-container');
+            if (userAgentSelect) {
+                userAgentSelect.value = s.userAgentPreset || 'chrome';
+                if (customUaContainer) {
+                    customUaContainer.style.display = userAgentSelect.value === 'custom' ? 'flex' : 'none';
+                }
+            }
+            if (userAgentCustomInput) userAgentCustomInput.value = s.userAgentCustom || '';
         }
 
         // Update EPG last refreshed display
