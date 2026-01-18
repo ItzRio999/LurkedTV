@@ -1,4 +1,5 @@
 const express = require('express');
+require('dotenv').config();
 const path = require('path');
 const passport = require('passport');
 const syncService = require('./services/syncService');
@@ -17,7 +18,14 @@ app.set('trust proxy', true);
 app.use(express.json({ limit: '50mb' }));
 
 // Initialize Passport
+const session = require('express-session');
+app.use(session({
+    secret: process.env.JWT_SECRET || 'keyboard cat',
+    resave: false,
+    saveUninitialized: true
+}));
 app.use(passport.initialize());
+app.use(passport.session());
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
