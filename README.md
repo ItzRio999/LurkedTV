@@ -117,6 +117,19 @@ Ensure you have the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacente
 **Verify:**
 After restarting the container, go to **Settings -> Transcoding**. The **Hardware Detection** status should list your GPU (e.g., "NVIDIA GPU Detected" or "VAAPI Available").
 
+### SSO / OIDC Setup
+
+Enable Single Sign-On (SSO) with your preferred OIDC provider (Authentik, Keycloak, etc.) by configuring these variables in your `.env` file or Docker environment:
+
+```env
+OIDC_ISSUER_URL=https://your-idp.com/application/o/nodecast/
+OIDC_CLIENT_ID=your_client_id
+OIDC_CLIENT_SECRET=your_client_secret
+OIDC_CALLBACK_URL=http://localhost:3000/api/auth/oidc/callback # Adjust for your domain
+```
+
+**Note:** New users signing in via SSO are automatically assigned the **Viewer** role. You must manually promote them to Admin if desired.
+
 ### Usage
 
 1.  Go to **Settings** -> **Content Sources**.
