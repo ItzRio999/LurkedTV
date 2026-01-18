@@ -17,6 +17,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 const EventEmitter = require('events');
+const hwDetect = require('./hwDetect');
 
 // Session storage
 const sessions = new Map();
@@ -166,8 +167,15 @@ class TranscodeSession extends EventEmitter {
      */
     buildFFmpegArgs() {
         const segmentPattern = path.join(this.dir, 'seg%04d.m4s');
-        const encoder = this.options.hwEncoder || 'software';
         const videoMode = this.options.videoMode || 'encode';
+
+        // Resolve 'auto' encoder to detected hardware, fallback to software
+        let encoder = this.options.hwEncoder || 'software';
+        if (encoder === 'auto') {
+            const hwCaps = hwDetect.getCapabilities();
+            encoder = hwCaps?.recommended || 'software';
+            console.log(`[TranscodeSession ${this.id}] Auto encoder resolved to: ${encoder}`);
+        }
 
         const args = [
             '-hide_banner',
