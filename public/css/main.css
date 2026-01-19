@@ -1116,7 +1116,7 @@ video::cue {
   bottom: 0;
   width: 2px;
   background: var(--color-error);
-  z-index: 15;
+  z-index: 2;
 }
 
 /* =====================================================

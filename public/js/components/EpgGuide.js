@@ -483,8 +483,14 @@ class EpgGuide {
         // Sync header corner width with actual sidebar width (handles CSS overrides)
         this.syncHeaderCornerWidth();
 
-        // Add now indicator
+        // Add now indicator and set up periodic refresh
         this.updateNowIndicator();
+        // Clear any existing interval
+        if (this._nowIndicatorInterval) {
+            clearInterval(this._nowIndicatorInterval);
+        }
+        // Update indicator every 60 seconds
+        this._nowIndicatorInterval = setInterval(() => this.updateNowIndicator(), 60000);
     }
 
     /**
@@ -851,29 +857,29 @@ class EpgGuide {
 
     updateNowIndicator() {
         const now = new Date();
-        const container = this.container.querySelector('.epg-container');
-        if (!container) return;
+        // Place indicator inside the spacer so it scrolls with content
+        const spacer = this.container.querySelector('.epg-spacer');
+        if (!spacer) return;
 
         // Remove existing indicator
-        const existing = container.querySelector('.epg-now-line');
+        const existing = spacer.querySelector('.epg-now-line');
         if (existing) existing.remove();
 
-        // Calculate position
-        const startTime = new Date();
-        startTime.setHours(startTime.getHours() + this.timeOffset);
-        startTime.setMinutes(0, 0, 0);
+        // Calculate position relative to EPG start time
+        const minutesFromStart = (now - this.startTime) / 60000;
+        if (minutesFromStart < 0 || minutesFromStart > 1440) return; // Not in visible 24h range
 
-        const minutesFromStart = (now - startTime) / 60000;
-        if (minutesFromStart < 0 || minutesFromStart > 240) return; // Not in visible range
+        // Get sidebar width to offset the indicator
+        const sidebar = this.container.querySelector('.epg-channel-info');
+        const sidebarWidth = sidebar ? sidebar.offsetWidth : 150;
 
-        // Get current sidebar width
-        const sidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--epg-sidebar-width')) || 150;
+        // Position is sidebar + time offset
         const leftPos = sidebarWidth + (minutesFromStart * this.pixelsPerMinute);
 
         const indicator = document.createElement('div');
         indicator.className = 'epg-now-line';
         indicator.style.left = `${leftPos}px`;
-        container.appendChild(indicator);
+        spacer.appendChild(indicator);
     }
 
     /**
