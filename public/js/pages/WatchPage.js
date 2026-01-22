@@ -151,10 +151,18 @@ class WatchPage {
         this.video?.addEventListener('waiting', () => this.showLoading());
         this.video?.addEventListener('canplay', () => this.hideLoading());
 
-        // Overlay auto-hide
+        // Overlay auto-hide + click to toggle play
         const watchSection = document.querySelector('.watch-video-section');
         watchSection?.addEventListener('mousemove', () => this.showOverlay());
         watchSection?.addEventListener('touchstart', () => this.showOverlay());
+        watchSection?.addEventListener('click', (e) => {
+            this.showOverlay();
+            // Only toggle play if clicking on video area (not controls)
+            if (e.target === this.video || e.target === watchSection ||
+                e.target.classList.contains('watch-overlay') || e.target === this.overlay) {
+                this.togglePlay();
+            }
+        });
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => this.handleKeyboard(e));
@@ -1243,9 +1251,11 @@ class WatchPage {
     }
 
     async playNextEpisode() {
+        // Save next episode data BEFORE canceling (cancel clears the data)
+        const nextEp = this.nextEpisodePanel?.nextEpisodeData;
+
         this.cancelNextEpisode();
 
-        const nextEp = this.nextEpisodePanel?.nextEpisodeData;
         if (!nextEp) return;
 
         try {

@@ -179,9 +179,23 @@ class VideoPlayer {
             togglePlay();
         });
 
+        // Center play button (large button shown when paused)
+        const centerPlayBtn = document.getElementById('player-center-play');
+        centerPlayBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            togglePlay();
+        });
+
+        // Click on video to toggle play/pause
+        this.video?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            togglePlay();
+        });
+
         // Update play/pause UI
         const updatePlayUI = () => {
             const isPaused = this.video.paused;
+            const hasVideo = this.video.src && this.video.src !== '' && this.video.readyState > 0;
 
             // Bottom bar button
             const iconPlay = btnPlay?.querySelector('.icon-play');
@@ -190,6 +204,11 @@ class VideoPlayer {
             if (iconPlay && iconPause) {
                 iconPlay.classList.toggle('hidden', !isPaused);
                 iconPause.classList.toggle('hidden', isPaused);
+            }
+
+            // Center play button - show only when paused AND video is loaded
+            if (centerPlayBtn) {
+                centerPlayBtn.classList.toggle('show', isPaused && hasVideo);
             }
         };
 
@@ -329,7 +348,13 @@ class VideoPlayer {
         };
 
         this.container.addEventListener('mousemove', showOverlay);
-        this.container.addEventListener('click', showOverlay);
+        this.container.addEventListener('click', (e) => {
+            showOverlay();
+            // Only toggle play if clicking directly on video or container (not controls)
+            if (e.target === this.video || e.target === this.container || e.target.classList.contains('watch-overlay')) {
+                togglePlay();
+            }
+        });
         this.container.addEventListener('touchstart', showOverlay);
 
         this.video.addEventListener('play', resetOverlayTimer);
