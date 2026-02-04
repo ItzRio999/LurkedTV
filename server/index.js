@@ -88,6 +88,49 @@ function findFFprobe() {
 app.locals.ffmpegPath = findFFmpeg();
 app.locals.ffprobePath = findFFprobe();
 
+// Dynamic services loader - collects exports from files in ./services
+const fs = require('fs');
+const services = {};
+try {
+    const servicesDir = path.join(__dirname, 'services');
+    const serviceFiles = fs.readdirSync(servicesDir).filter(f => f.endsWith('.js'));
+    for (const file of serviceFiles) {
+        const name = file.replace(/\.js$/, '');
+        try {
+            services[name] = require(path.join(servicesDir, file));
+        } catch (e) {
+            console.warn(`Failed to load service ${file}:`, e.message);
+        }
+    }
+} catch (e) {
+    console.warn('No services directory found or failed to read services:', e.message);
+}
+
+// Plugin loader: loads any .js file inside server/plugins and calls the
+// exported function with (app, services).
+try {
+    const pluginsDir = path.join(__dirname, 'plugins');
+    if (fs.existsSync(pluginsDir)) {
+        const pluginFiles = fs.readdirSync(pluginsDir).filter(f => f.endsWith('.js'));
+        for (const file of pluginFiles) {
+            const pluginPath = path.join(pluginsDir, file);
+            try {
+                const plugin = require(pluginPath);
+                if (typeof plugin === 'function') {
+                    plugin(app, services);
+                    console.log(`Loaded plugin: ${file}`);
+                } else {
+                    console.warn(`Plugin ${file} does not export a function, skipping.`);
+                }
+            } catch (err) {
+                console.error(`Failed to load plugin ${file}:`, err);
+            }
+        }
+    }
+} catch (err) {
+    console.warn('Plugin loader failed:', err.message);
+}
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/sources', require('./routes/sources'));
