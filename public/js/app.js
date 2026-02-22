@@ -1,5 +1,5 @@
 /**
- * NodeCast TV Application Entry Point
+ * LurkedTv Application Entry Point
  */
 
 class App {
@@ -7,6 +7,7 @@ class App {
         this.currentPage = 'home';
         this.pages = {};
         this.currentUser = null;
+        this.device = this.detectDeviceCapabilities();
 
         // Initialize components
         this.player = new VideoPlayer();
@@ -20,6 +21,7 @@ class App {
         this.pages.guide = new GuidePage(this);
         this.pages.movies = new MoviesPage(this);
         this.pages.series = new SeriesPage(this);
+        this.pages.search = new SearchPage(this);
         this.pages.settings = new SettingsPage(this);
         this.pages.watch = new WatchPage(this);
 
@@ -29,6 +31,7 @@ class App {
     async init() {
         // Check authentication first
         await this.checkAuth();
+        this.setupDeviceExperience();
 
         // Mobile menu toggle
         const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
@@ -114,14 +117,7 @@ class App {
             });
         });
 
-        // Now Playing indicator
-        const nowPlayingBtn = document.getElementById('now-playing-indicator');
-        if (nowPlayingBtn) {
-            nowPlayingBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.navigateTo('watch');
-            });
-        }
+        this.setupGlobalSearch();
 
         // Toggle groups button
         document.getElementById('toggle-groups').addEventListener('click', () => {
@@ -161,7 +157,141 @@ class App {
         const initialPage = hash && this.pages[hash] ? hash : 'home';
         this.navigateTo(initialPage, true); // true = replace history (don't add)
 
-        console.log('NodeCast TV initialized');
+        console.log('LurkedTv initialized');
+    }
+
+    detectDeviceCapabilities() {
+        const ua = navigator.userAgent || '';
+        const platform = navigator.platform || '';
+        const maxTouchPoints = navigator.maxTouchPoints || 0;
+        const isIOS = /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1);
+        const isTouch = maxTouchPoints > 0 || window.matchMedia('(hover: none), (pointer: coarse)').matches;
+        const isSmallViewport = () => window.matchMedia('(max-width: 768px)').matches;
+
+        return { isIOS, isTouch, isSmallViewport };
+    }
+
+    setupDeviceExperience() {
+        const root = document.documentElement;
+        root.classList.toggle('is-ios', this.device.isIOS);
+        root.classList.toggle('is-touch', this.device.isTouch);
+
+        const updateViewportVars = () => {
+            const vh = window.innerHeight * 0.01;
+            root.style.setProperty('--vh', `${vh}px`);
+
+            let uiBottom = 0;
+            if (this.device.isIOS && window.visualViewport) {
+                const vv = window.visualViewport;
+                uiBottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+            }
+            root.style.setProperty('--ios-ui-bottom', `${uiBottom}px`);
+        };
+
+        updateViewportVars();
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', updateViewportVars, { passive: true });
+            window.visualViewport.addEventListener('scroll', updateViewportVars, { passive: true });
+        }
+
+        window.addEventListener('resize', updateViewportVars, { passive: true });
+        window.addEventListener('orientationchange', updateViewportVars, { passive: true });
+
+        if (this.device.isTouch) {
+            this.initTouchGestures();
+        }
+    }
+
+    initTouchGestures() {
+        let startX = 0;
+        let startY = 0;
+        let startTime = 0;
+        let startTarget = null;
+        let tracking = false;
+
+        const isInteractiveTarget = (target) => {
+            return Boolean(target?.closest?.(
+                'input, textarea, select, button, a, [role="button"], .watch-controls, .watch-overlay, .video-container, .watch-video-section, .horizontal-scroll'
+            ));
+        };
+
+        const closeMobileMenu = () => {
+            const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+            const navbarMenu = document.getElementById('navbar-menu');
+            if (!mobileMenuToggle || !navbarMenu || !navbarMenu.classList.contains('active')) return;
+            mobileMenuToggle.classList.remove('active');
+            navbarMenu.classList.remove('active');
+        };
+
+        const toggleChannelDrawer = (open) => {
+            const channelSidebar = document.getElementById('channel-sidebar');
+            const channelOverlay = document.getElementById('channel-sidebar-overlay');
+            if (!channelSidebar || !channelOverlay) return;
+
+            const shouldOpen = typeof open === 'boolean' ? open : !channelSidebar.classList.contains('active');
+            channelSidebar.classList.toggle('active', shouldOpen);
+            channelOverlay.classList.toggle('active', shouldOpen);
+        };
+
+        document.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) {
+                tracking = false;
+                return;
+            }
+
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            startTime = Date.now();
+            startTarget = e.target;
+            tracking = true;
+        }, { passive: true });
+
+        document.addEventListener('touchend', (e) => {
+            if (!tracking || e.changedTouches.length !== 1) return;
+            tracking = false;
+
+            const touch = e.changedTouches[0];
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            const absX = Math.abs(dx);
+            const absY = Math.abs(dy);
+            const elapsed = Date.now() - startTime;
+
+            // Only handle quick, clearly horizontal swipes.
+            if (elapsed > 700 || absX < 70 || absX < absY * 1.4) return;
+            if (isInteractiveTarget(startTarget)) return;
+
+            const isEdgeSwipe = startX <= 24;
+            const isSmallViewport = this.device.isSmallViewport();
+
+            // iOS-like edge swipe: open channel drawer on Home mobile, otherwise navigate back.
+            if (dx > 0 && isEdgeSwipe && this.device.isIOS) {
+                if (isSmallViewport && this.currentPage === 'home') {
+                    toggleChannelDrawer(true);
+                    closeMobileMenu();
+                    return;
+                }
+
+                if (window.history.length > 1 && this.currentPage !== 'home') {
+                    window.history.back();
+                }
+                return;
+            }
+
+            // Close mobile surfaces with left swipe.
+            if (dx < 0) {
+                if (isSmallViewport) {
+                    closeMobileMenu();
+                }
+
+                const channelSidebar = document.getElementById('channel-sidebar');
+                if (channelSidebar?.classList.contains('active')) {
+                    toggleChannelDrawer(false);
+                }
+            }
+        }, { passive: true });
     }
 
     async checkAuth() {
@@ -186,14 +316,6 @@ class App {
             }
 
             this.currentUser = await response.json();
-
-            // Hide settings for viewers
-            if (this.currentUser.role === 'viewer') {
-                const settingsLink = document.querySelector('.nav-link[data-page="settings"]');
-                if (settingsLink) {
-                    settingsLink.style.display = 'none';
-                }
-            }
 
             // Add logout button to navbar
             this.addLogoutButton();
@@ -238,6 +360,26 @@ class App {
         });
 
         navbar.appendChild(logoutLink);
+    }
+
+    setupGlobalSearch() {
+        const input = document.getElementById('global-search');
+        if (!input || !this.pages.search) return;
+
+        let searchTimer = null;
+        input.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            const query = input.value.trim();
+            searchTimer = setTimeout(() => {
+                this.pages.search.setQuery(query, true);
+            }, 250);
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            this.pages.search.setQuery(input.value.trim(), true);
+        });
     }
 
     navigateTo(pageName, replaceHistory = false) {
@@ -291,3 +433,5 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(() => { });
 });
+
+

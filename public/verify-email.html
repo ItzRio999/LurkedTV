@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Email - LurkedTv</title>
+    <link rel="icon" type="image/png" href="/img/LurkedTV.png?v=2">
+    <link rel="shortcut icon" type="image/png" href="/img/LurkedTV.png?v=2">
+    <link rel="stylesheet" href="css/main.css">
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background: var(--color-bg-primary);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: var(--color-text-primary);
+        }
+
+        .verify-wrap {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .verify-card {
+            width: 100%;
+            max-width: 520px;
+            background: var(--color-bg-secondary);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            box-shadow: var(--shadow-lg);
+            text-align: center;
+        }
+
+        .verify-card h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }
+
+        .verify-email {
+            color: var(--color-accent);
+            font-weight: 700;
+            word-break: break-word;
+            margin-bottom: 12px;
+        }
+
+        .verify-status {
+            margin: 0 0 18px 0;
+            color: var(--color-text-secondary);
+            font-size: 14px;
+        }
+
+        .verify-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            min-width: 140px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="verify-wrap">
+        <div class="verify-card">
+            <h1>Verify Your Email</h1>
+            <p class="verify-status">We sent a verification link to:</p>
+            <p class="verify-email" id="verify-email">-</p>
+            <p class="verify-status" id="verify-status">Waiting for verification. Auto-check every 30 seconds.</p>
+
+            <div class="verify-actions">
+                <button class="btn btn-primary" id="verify-now-btn">Verify Now</button>
+                <button class="btn btn-secondary" id="open-email-btn">Open Email</button>
+                <button class="btn btn-secondary" id="resend-btn">Resend Email</button>
+                <button class="btn btn-ghost" id="back-login-btn">Back To Login</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+        import { getAuth, onAuthStateChanged, sendEmailVerification } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCnw2SySq8zl2PHjneE7_zEuosYueOo5Pk",
+            authDomain: "lurkedtv-b8047.firebaseapp.com",
+            projectId: "lurkedtv-b8047",
+            storageBucket: "lurkedtv-b8047.firebasestorage.app",
+            messagingSenderId: "929847356493",
+            appId: "1:929847356493:web:6c999e524c494523afc004",
+            measurementId: "G-ZWZTSJB2EM"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const firebaseAuth = getAuth(app);
+
+        const emailEl = document.getElementById('verify-email');
+        const statusEl = document.getElementById('verify-status');
+        const verifyNowBtn = document.getElementById('verify-now-btn');
+        const openEmailBtn = document.getElementById('open-email-btn');
+        const resendBtn = document.getElementById('resend-btn');
+        const backLoginBtn = document.getElementById('back-login-btn');
+
+        const pendingEmail = sessionStorage.getItem('pendingVerificationEmail');
+        if (pendingEmail) {
+            emailEl.textContent = pendingEmail;
+        }
+        updateOpenEmailButton(pendingEmail);
+
+        function setStatus(message) {
+            statusEl.textContent = message;
+        }
+
+        function getWebmailTarget(email) {
+            if (!email || !email.includes('@')) {
+                return { label: 'Open Email', url: 'https://mail.google.com/' };
+            }
+
+            const domain = email.split('@')[1].toLowerCase();
+
+            const providers = [
+                { match: ['gmail.com', 'googlemail.com'], label: 'Open Gmail', url: 'https://mail.google.com/' },
+                { match: ['outlook.com', 'hotmail.com', 'live.com', 'msn.com'], label: 'Open Outlook', url: 'https://outlook.live.com/mail/' },
+                { match: ['yahoo.com', 'ymail.com', 'rocketmail.com'], label: 'Open Yahoo Mail', url: 'https://mail.yahoo.com/' },
+                { match: ['icloud.com', 'me.com', 'mac.com'], label: 'Open iCloud Mail', url: 'https://www.icloud.com/mail/' },
+                { match: ['aol.com'], label: 'Open AOL Mail', url: 'https://mail.aol.com/' },
+                { match: ['proton.me', 'protonmail.com', 'pm.me'], label: 'Open Proton Mail', url: 'https://mail.proton.me/' },
+                { match: ['zoho.com'], label: 'Open Zoho Mail', url: 'https://mail.zoho.com/' }
+            ];
+
+            const provider = providers.find(p => p.match.includes(domain));
+            if (provider) return provider;
+
+            return { label: 'Open Email', url: `https://${domain}` };
+        }
+
+        function updateOpenEmailButton(email) {
+            const target = getWebmailTarget(email);
+            openEmailBtn.textContent = target.label;
+            openEmailBtn.dataset.url = target.url;
+        }
+
+        async function exchangeFirebaseToken(idToken) {
+            const response = await fetch('/api/auth/firebase', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ idToken })
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.error || 'Server authentication failed');
+            }
+            return data.token;
+        }
+
+        async function createQuickSource(sourceData, token) {
+            if (!sourceData) return;
+
+            const response = await fetch('/api/sources', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(sourceData)
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || 'Failed to create playlist source');
+            }
+        }
+
+        async function finalizeLoginAfterVerification(user) {
+            const idToken = await user.getIdToken(true);
+            const appToken = await exchangeFirebaseToken(idToken);
+            localStorage.setItem('authToken', appToken);
+
+            const pendingSourceRaw = sessionStorage.getItem('pendingQuickPlaylistSource');
+            if (pendingSourceRaw) {
+                try {
+                    await createQuickSource(JSON.parse(pendingSourceRaw), appToken);
+                } catch (err) {
+                    console.warn('Quick playlist setup failed:', err.message);
+                } finally {
+                    sessionStorage.removeItem('pendingQuickPlaylistSource');
+                }
+            }
+
+            sessionStorage.removeItem('pendingVerificationEmail');
+            window.location.replace('/');
+        }
+
+        async function checkVerification(manual = false) {
+            const user = firebaseAuth.currentUser;
+            if (!user) {
+                setStatus('No active session. Please sign in again.');
+                return;
+            }
+
+            if (manual) {
+                setStatus('Checking verification status...');
+            }
+
+            await user.reload();
+            const resolvedEmail = user.email || pendingEmail || '-';
+            emailEl.textContent = resolvedEmail;
+            updateOpenEmailButton(resolvedEmail);
+
+            if (user.emailVerified) {
+                setStatus('Email verified. Signing you in...');
+                await finalizeLoginAfterVerification(user);
+                return;
+            }
+
+            setStatus('Not verified yet. Auto-check every 30 seconds.');
+        }
+
+        verifyNowBtn.addEventListener('click', async () => {
+            try {
+                await checkVerification(true);
+            } catch (err) {
+                setStatus(`Verification check failed: ${err.message}`);
+            }
+        });
+
+        openEmailBtn.addEventListener('click', () => {
+            const url = openEmailBtn.dataset.url || 'https://mail.google.com/';
+            window.open(url, '_blank', 'noopener,noreferrer');
+        });
+
+        resendBtn.addEventListener('click', async () => {
+            const user = firebaseAuth.currentUser;
+            if (!user) {
+                setStatus('No active session. Please sign in again.');
+                return;
+            }
+
+            try {
+                await sendEmailVerification(user);
+                setStatus('Verification email re-sent. Check your inbox.');
+            } catch (err) {
+                setStatus(`Failed to resend email: ${err.message}`);
+            }
+        });
+
+        backLoginBtn.addEventListener('click', () => {
+            sessionStorage.removeItem('pendingQuickPlaylistSource');
+            sessionStorage.removeItem('pendingVerificationEmail');
+            window.location.replace('/login.html');
+        });
+
+        onAuthStateChanged(firebaseAuth, async (user) => {
+            if (!user) {
+                window.location.replace('/login.html');
+                return;
+            }
+
+            const resolvedEmail = user.email || pendingEmail || '-';
+            emailEl.textContent = resolvedEmail;
+            updateOpenEmailButton(resolvedEmail);
+
+            try {
+                await checkVerification(false);
+            } catch (err) {
+                setStatus(`Failed to check verification status: ${err.message}`);
+            }
+        });
+
+        setInterval(() => {
+            checkVerification(false).catch(() => { });
+        }, 30000);
+    </script>
+</body>
+
+</html>

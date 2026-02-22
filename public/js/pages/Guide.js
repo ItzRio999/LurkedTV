@@ -36,3 +36,4 @@ class GuidePage {
 }
 
 window.GuidePage = GuidePage;
+

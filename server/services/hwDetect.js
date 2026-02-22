@@ -9,7 +9,7 @@
  * Results are cached at startup and exposed via API.
  */
 
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
 const os = require('os');
 
 // Cache detection results
@@ -211,6 +211,35 @@ async function detectAMF() {
 }
 
 /**
+ * Detect CPU capabilities for software/hybrid transcoding
+ */
+function detectCPU() {
+    const cpuList = os.cpus() || [];
+    const logicalThreads = cpuList.length;
+    const model = cpuList[0]?.model?.trim() || 'Unknown CPU';
+    const platform = os.platform();
+
+    // Best-effort estimate for physical cores.
+    // We avoid platform-specific native dependencies and keep a safe heuristic.
+    const physicalCores = Math.max(1, Math.floor(logicalThreads / 2));
+    const recommendedThreads = Math.max(2, Math.min(24, Math.floor(logicalThreads * 0.75)));
+
+    const cpu = {
+        available: logicalThreads > 0,
+        model,
+        physicalCores,
+        logicalThreads,
+        recommendedThreads,
+        totalMemoryGb: Math.round((os.totalmem() / (1024 ** 3)) * 10) / 10,
+        arch: os.arch(),
+        platform
+    };
+
+    console.log(`[HwDetect] CPU detected: ${model} (${physicalCores}C/${logicalThreads}T)`);
+    return cpu;
+}
+
+/**
  * Detect all hardware capabilities
  * Results are cached for performance
  */
@@ -221,11 +250,12 @@ async function detect() {
 
     console.log('[HwDetect] Probing hardware acceleration capabilities...');
 
-    const [nvidia, vaapi, qsv, amf] = await Promise.all([
+    const [nvidia, vaapi, qsv, amf, cpu] = await Promise.all([
         detectNvidia(),
         detectVAAPI(),
         detectQuickSync(),
-        detectAMF()
+        detectAMF(),
+        Promise.resolve(detectCPU())
     ]);
 
     // Determine recommended encoder (priority: NVENC > AMF > QSV > VAAPI > Software)
@@ -245,7 +275,11 @@ async function detect() {
         amf,
         vaapi,
         qsv,
+        cpu,
         recommended,
+        recommendedPipeline: recommended === 'software'
+            ? 'cpu-only'
+            : `${recommended}+cpu-hybrid`,
         platform: os.platform(),
         detectedAt: new Date().toISOString()
     };

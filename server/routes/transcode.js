@@ -5,6 +5,9 @@ const path = require('path');
 const fs = require('fs').promises;
 const db = require('../db');
 const transcodeSession = require('../services/transcodeSession');
+const NON_ACTIONABLE_FFMPEG_WARNINGS = [
+    'mime type is not rfc8216 compliant'
+];
 
 /**
  * Transcode Routes
@@ -60,12 +63,33 @@ router.post('/session', async (req, res) => {
 
         await session.start();
 
-        // Wait for playlist to be ready (first segments generated)
-        const ready = await session.waitForPlaylist(15000);
+        // Wait for playlist to be ready (first segments generated).
+        // Seeking deep into VOD can take materially longer to produce first segment.
+        const safeSeekOffset = Number.isFinite(Number(seekOffset)) ? Math.max(0, Number(seekOffset)) : 0;
+        const baseStartupMs = 3500;
+        const copyModePenaltyMs = videoMode === 'copy' ? 1500 : 500;
+        const seekPenaltyMs = Math.min(12000, Math.floor(safeSeekOffset * 25)); // +25ms per seek second, capped at +12s
+        const startupTimeoutMs = baseStartupMs + copyModePenaltyMs + seekPenaltyMs;
+        const ready = await session.waitForPlaylist(startupTimeoutMs);
 
         if (!ready) {
+            // If FFmpeg is still running, keep session alive and let player retry manifest fetch.
+            if (session.status === 'running' || session.status === 'starting') {
+                console.warn(`[Transcode] Session ${session.id} still warming up after ${startupTimeoutMs}ms`);
+                return res.status(202).json({
+                    sessionId: session.id,
+                    playlistUrl: `/api/transcode/${session.id}/stream.m3u8`,
+                    status: session.status,
+                    pending: true,
+                    message: 'Playlist is still being generated'
+                });
+            }
+
             await transcodeSession.removeSession(session.id);
-            return res.status(500).json({ error: 'Transcoding failed to start', reason: 'Playlist not generated in time' });
+            return res.status(500).json({
+                error: 'Transcoding failed to start',
+                reason: session.error || 'Playlist not generated in time'
+            });
         }
 
         res.json({
@@ -92,8 +116,20 @@ router.get('/:sessionId/stream.m3u8', async (req, res) => {
         return res.status(404).json({ error: 'Session not found' });
     }
 
-    const playlist = await session.getPlaylist();
+    let playlist = await session.getPlaylist();
+    if (!playlist && (session.status === 'running' || session.status === 'starting')) {
+        // Short server-side grace period helps clients that request manifest immediately.
+        const ready = await session.waitForPlaylist(2500);
+        if (ready) {
+            playlist = await session.getPlaylist();
+        }
+    }
+
     if (!playlist) {
+        if (session.status === 'running' || session.status === 'starting') {
+            res.setHeader('Retry-After', '1');
+            return res.status(503).json({ error: 'Playlist warming up' });
+        }
         return res.status(404).json({ error: 'Playlist not ready' });
     }
 
@@ -244,6 +280,9 @@ router.get('/', async (req, res) => {
     ffmpeg.stderr.on('data', (data) => {
         const msg = data.toString();
         stderrBuffer += msg;
+        if (NON_ACTIONABLE_FFMPEG_WARNINGS.some(w => msg.toLowerCase().includes(w))) {
+            return;
+        }
         console.log(`[FFmpeg] ${msg}`);
     });
 

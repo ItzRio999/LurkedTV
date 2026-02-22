@@ -27,8 +27,11 @@ const CACHE_DIR = path.join(process.cwd(), 'transcode-cache');
 
 // Session settings
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes idle timeout
-const SEGMENT_DURATION = 4; // seconds per HLS segment
+const SEGMENT_DURATION = 2; // seconds per HLS segment (faster startup/seeking)
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Check every 5 minutes
+const NON_ACTIONABLE_FFMPEG_WARNINGS = [
+    'mime type is not rfc8216 compliant'
+];
 
 /**
  * Generate a unique session ID
@@ -127,6 +130,10 @@ class TranscodeSession extends EventEmitter {
                 if (lines.length > 1) {
                     lines.slice(0, -1).forEach(line => {
                         if (line.trim()) {
+                            const normalized = line.toLowerCase();
+                            if (NON_ACTIONABLE_FFMPEG_WARNINGS.some(w => normalized.includes(w))) {
+                                return;
+                            }
                             console.log(`[FFmpeg ${this.id}] ${line}`);
                         }
                     });
@@ -170,7 +177,6 @@ class TranscodeSession extends EventEmitter {
      * Build FFmpeg arguments for HLS output with optional GPU encoding
      */
     buildFFmpegArgs() {
-        const segmentPattern = path.join(this.dir, 'seg%04d.m4s');
         const videoMode = this.options.videoMode || 'encode';
 
         // Resolve 'auto' encoder to detected hardware, fallback to software
@@ -180,11 +186,15 @@ class TranscodeSession extends EventEmitter {
             encoder = hwCaps?.recommended || 'software';
             console.log(`[TranscodeSession ${this.id}] Auto encoder resolved to: ${encoder}`);
         }
+        const threadPlan = this.getThreadPlan(encoder);
 
         const args = [
             '-hide_banner',
             '-loglevel', 'warning',
             '-user_agent', this.options.userAgent,
+            // Use CPU threads for demux, filters, and audio even when GPU encoding is active.
+            '-threads', String(threadPlan.ffmpegThreads),
+            '-filter_threads', String(threadPlan.filterThreads),
         ];
 
         // Add hardware acceleration input options based on encoder (only if encoding)
@@ -194,8 +204,8 @@ class TranscodeSession extends EventEmitter {
 
         // Input options (common)
         args.push(
-            '-probesize', '5000000',
-            '-analyzeduration', '5000000',
+            '-probesize', '2000000',
+            '-analyzeduration', '2000000',
             '-fflags', '+genpts+discardcorrupt',
             '-err_detect', 'ignore_err',
             '-reconnect', '1',
@@ -228,7 +238,7 @@ class TranscodeSession extends EventEmitter {
                 args.push('-bsf:v', 'dump_extra');
             }
         } else {
-            this.addVideoEncoderArgs(args, encoder);
+            this.addVideoEncoderArgs(args, encoder, threadPlan);
         }
 
         // Audio: Apply mix preset
@@ -284,6 +294,33 @@ class TranscodeSession extends EventEmitter {
     }
 
     /**
+     * CPU/GPU hybrid thread planning for FFmpeg.
+     * Keeps CPU involved for decode/demux/audio/filter stages even with GPU video encode.
+     */
+    getThreadPlan(encoder) {
+        const hwCaps = hwDetect.getCapabilities();
+        const logicalThreads = hwCaps?.cpu?.logicalThreads || 4;
+        const recommended = hwCaps?.cpu?.recommendedThreads || Math.max(2, Math.floor(logicalThreads * 0.75));
+
+        if (encoder === 'software') {
+            const ffmpegThreads = Math.max(2, Math.min(24, recommended));
+            return {
+                ffmpegThreads,
+                filterThreads: Math.max(2, Math.min(12, Math.floor(ffmpegThreads / 2))),
+                x264Threads: ffmpegThreads
+            };
+        }
+
+        // GPU encode path: keep enough CPU for demux/audio while avoiding oversubscription.
+        const ffmpegThreads = Math.max(2, Math.min(16, Math.floor(recommended * 0.7)));
+        return {
+            ffmpegThreads,
+            filterThreads: Math.max(2, Math.min(8, Math.floor(ffmpegThreads / 2))),
+            x264Threads: null
+        };
+    }
+
+    /**
      * Add hardware acceleration input arguments
      */
     addHwAccelInputArgs(args, encoder) {
@@ -325,7 +362,7 @@ class TranscodeSession extends EventEmitter {
     /**
      * Add video encoder arguments based on selected encoder
      */
-    addVideoEncoderArgs(args, encoder) {
+    addVideoEncoderArgs(args, encoder, threadPlan = {}) {
         const resolution = this.getTargetHeight();
         const quality = this.options.quality || 'medium';
 
@@ -353,7 +390,7 @@ class TranscodeSession extends EventEmitter {
             case 'software':
             case 'auto':
             default:
-                this.addSoftwareEncoderArgs(args, resolution, qp.software);
+                this.addSoftwareEncoderArgs(args, resolution, qp.software, threadPlan);
                 break;
         }
     }
@@ -497,18 +534,22 @@ class TranscodeSession extends EventEmitter {
     /**
      * Software encoder arguments (fallback)
      */
-    addSoftwareEncoderArgs(args, height, crf) {
+    addSoftwareEncoderArgs(args, height, crf, threadPlan = {}) {
         // Software scaling (use Lanczos for upscaling if enabled)
         args.push('-vf', this.buildScaleFilter('software', height));
 
         args.push(
             '-c:v', 'libx264',
-            '-preset', 'veryfast',     // Fast for real-time
+            '-preset', this.options.upscaleEnabled ? 'superfast' : 'veryfast', // Prefer faster startup for upscale transcodes
             '-crf', String(crf),
+            '-tune', 'zerolatency',
             '-profile:v', 'high',
-            '-level', '4.1',
             '-pix_fmt', 'yuv420p'      // Force 8-bit output for compatibility (fixes 10-bit input errors)
         );
+
+        if (threadPlan.x264Threads) {
+            args.push('-x264-params', `threads=${threadPlan.x264Threads}`);
+        }
     }
 
     /**
@@ -557,6 +598,9 @@ class TranscodeSession extends EventEmitter {
         while (Date.now() - startTime < timeoutMs) {
             if (await this.isPlaylistReady()) {
                 return true;
+            }
+            if (this.status === 'error' || this.status === 'stopped') {
+                return false;
             }
             await new Promise(resolve => setTimeout(resolve, 200));
         }

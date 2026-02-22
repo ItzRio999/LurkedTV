@@ -12,10 +12,34 @@ class XtreamApi {
     }
 
     /**
+     * Resolve the player_api endpoint from various provider URL formats.
+     * Supports base host URLs and URLs that already include another php endpoint.
+     */
+    resolvePlayerApiUrl() {
+        const url = new URL(this.baseUrl);
+        let path = (url.pathname || '').replace(/\/+$/, '');
+
+        if (!path || path === '/') {
+            path = '/player_api.php';
+        } else if (path.endsWith('/player_api.php')) {
+            // already correct
+        } else if (path.endsWith('.php')) {
+            path = path.replace(/\/[^/]+\.php$/, '/player_api.php');
+        } else {
+            path = `${path}/player_api.php`;
+        }
+
+        url.pathname = path;
+        url.search = '';
+        url.hash = '';
+        return url;
+    }
+
+    /**
      * Build API URL with authentication
      */
     buildApiUrl(action, params = {}) {
-        const url = new URL(`${this.baseUrl}/player_api.php`);
+        const url = this.resolvePlayerApiUrl();
         url.searchParams.set('username', this.username);
         url.searchParams.set('password', this.password);
         if (action) {
@@ -30,15 +54,93 @@ class XtreamApi {
     }
 
     /**
-     * Make API request
+     * Redact sensitive query params before logging.
      */
-    async request(action, params = {}) {
-        const url = this.buildApiUrl(action, params);
+    sanitizeUrl(rawUrl) {
+        try {
+            const u = new URL(rawUrl);
+            if (u.searchParams.has('username')) {
+                u.searchParams.set('username', '***');
+            }
+            if (u.searchParams.has('password')) {
+                u.searchParams.set('password', '***');
+            }
+            return u.toString();
+        } catch {
+            return '[invalid-url]';
+        }
+    }
+
+    /**
+     * Parse HTML pages that perform JavaScript/meta redirects and return target URL.
+     */
+    extractHtmlRedirectUrl(bodyText, currentUrl) {
+        const patterns = [
+            /var\s+url\s*=\s*["']([^"']+)["']/i,
+            /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i,
+            /location\.href\s*=\s*["']([^"']+)["']/i,
+            /<meta[^>]+http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'>\s]+)[^"']*["']/i
+        ];
+
+        for (const pattern of patterns) {
+            const match = bodyText.match(pattern);
+            if (match && match[1]) {
+                try {
+                    return new URL(match[1], currentUrl).toString();
+                } catch {
+                    continue;
+                }
+            }
+        }
+        return null;
+    }
+
+    async requestUrl(url, action, attempt = 0) {
+        const MAX_ATTEMPTS = 2;
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`Xtream API error: ${response.status} ${response.statusText}`);
         }
-        return response.json();
+
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        const bodyText = await response.text();
+
+        try {
+            return JSON.parse(bodyText);
+        } catch {
+            // Some providers return an HTML script page that redirects to HTTPS or another host.
+            if (attempt < MAX_ATTEMPTS) {
+                const htmlRedirectUrl = this.extractHtmlRedirectUrl(bodyText, url);
+                if (htmlRedirectUrl && htmlRedirectUrl !== url) {
+                    console.warn(
+                        `[XtreamApi] HTML redirect detected for action "${action || 'auth'}"; retrying via ${this.sanitizeUrl(htmlRedirectUrl)}`
+                    );
+                    return this.requestUrl(htmlRedirectUrl, action, attempt + 1);
+                }
+
+                if (url.startsWith('http://')) {
+                    const httpsUrl = `https://${url.slice('http://'.length)}`;
+                    console.warn(
+                        `[XtreamApi] Non-JSON HTML response for action "${action || 'auth'}"; retrying with HTTPS ${this.sanitizeUrl(httpsUrl)}`
+                    );
+                    return this.requestUrl(httpsUrl, action, attempt + 1);
+                }
+            }
+
+            const snippet = bodyText.slice(0, 200).replace(/\s+/g, ' ').trim();
+            throw new Error(
+                `Xtream API returned non-JSON response for action "${action || 'auth'}" (${contentType || 'unknown content-type'}) ` +
+                `at ${this.sanitizeUrl(url)}. Body starts with: ${snippet || '[empty]'}`
+            );
+        }
+    }
+
+    /**
+     * Make API request
+     */
+    async request(action, params = {}) {
+        const url = this.buildApiUrl(action, params);
+        return this.requestUrl(url, action);
     }
 
     /**

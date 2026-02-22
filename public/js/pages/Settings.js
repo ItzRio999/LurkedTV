@@ -25,6 +25,105 @@ class SettingsPage {
 
         // User management (admin only)
         this.initUserManagement();
+
+        // Firebase media cache controls
+        this.initFirebaseCacheControls();
+
+        // Account settings for all users
+        this.initAccountSettings();
+    }
+
+    initAccountSettings() {
+        const languageSelect = document.getElementById('setting-default-language');
+        const passwordForm = document.getElementById('account-password-form');
+        const feedback = document.getElementById('account-password-feedback');
+
+        languageSelect?.addEventListener('change', async () => {
+            try {
+                const value = languageSelect.value || '';
+                const updatedUser = await API.account.updatePreferences({ defaultLanguage: value });
+                this.app.currentUser = updatedUser;
+                this.applyDefaultLanguagePreference(updatedUser.defaultLanguage || '');
+            } catch (err) {
+                alert(`Failed to save default language: ${err.message}`);
+            }
+        });
+
+        passwordForm?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const currentPassword = document.getElementById('setting-current-password')?.value || '';
+            const newPassword = document.getElementById('setting-new-password')?.value || '';
+            const confirmPassword = document.getElementById('setting-confirm-password')?.value || '';
+
+            if (newPassword.length < 6) {
+                if (feedback) feedback.textContent = 'New password must be at least 6 characters.';
+                return;
+            }
+
+            if (newPassword !== confirmPassword) {
+                if (feedback) feedback.textContent = 'New password and confirmation do not match.';
+                return;
+            }
+
+            if (feedback) feedback.textContent = 'Updating password...';
+
+            try {
+                await API.account.changePassword({ currentPassword, newPassword });
+                passwordForm.reset();
+                if (feedback) feedback.textContent = 'Password updated successfully.';
+            } catch (err) {
+                if (feedback) feedback.textContent = `Password update failed: ${err.message}`;
+            }
+        });
+    }
+
+    applyDefaultLanguagePreference(languageCode) {
+        if (!languageCode) return;
+
+        const moviesSelect = document.getElementById('movies-language-select');
+        const seriesSelect = document.getElementById('series-language-select');
+
+        if (moviesSelect && Array.from(moviesSelect.options).some(o => o.value === languageCode)) {
+            moviesSelect.value = languageCode;
+            moviesSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        if (seriesSelect && Array.from(seriesSelect.options).some(o => o.value === languageCode)) {
+            seriesSelect.value = languageCode;
+            seriesSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }
+
+    async loadAccountSettings() {
+        const emailEl = document.getElementById('account-email');
+        const badgeEl = document.getElementById('account-email-verified-badge');
+        const languageSelect = document.getElementById('setting-default-language');
+
+        try {
+            const user = await API.account.getMe();
+            this.app.currentUser = user;
+
+            if (emailEl) {
+                emailEl.textContent = user.email || 'No email found';
+            }
+
+            if (badgeEl) {
+                badgeEl.textContent = user.emailVerified ? 'Verified' : 'Unverified';
+                badgeEl.classList.toggle('verified', !!user.emailVerified);
+            }
+
+            if (languageSelect) {
+                languageSelect.value = user.defaultLanguage || '';
+            }
+        } catch (err) {
+            console.error('Error loading account settings:', err);
+            if (emailEl) emailEl.textContent = 'Unable to load account';
+            if (badgeEl) {
+                badgeEl.textContent = 'Unknown';
+                badgeEl.classList.remove('verified');
+            }
+        }
     }
 
     initPlayerSettings() {
@@ -99,6 +198,7 @@ class SettingsPage {
         const hwEncoderSelect = document.getElementById('setting-hw-encoder');
         const maxResolutionSelect = document.getElementById('setting-max-resolution');
         const qualitySelect = document.getElementById('setting-quality');
+        const audioMixSelect = document.getElementById('setting-audio-mix');
 
         // Stream processing (use -tc suffix IDs from Transcoding tab)
         const forceProxyToggle = document.getElementById('setting-force-proxy-tc');
@@ -112,6 +212,8 @@ class SettingsPage {
         const userAgentSelect = document.getElementById('setting-user-agent-tc');
         const userAgentCustomInput = document.getElementById('setting-user-agent-custom-tc');
         const customUaContainer = document.getElementById('custom-user-agent-container-tc');
+        const autoOptimizeBtn = document.getElementById('auto-optimize-btn');
+        const autoOptimizeFeedback = document.getElementById('auto-optimize-feedback');
 
         // Fetch settings directly from API to avoid race condition with VideoPlayer
         let s;
@@ -154,7 +256,6 @@ class SettingsPage {
         });
 
         // Audio Mix Preset
-        const audioMixSelect = document.getElementById('setting-audio-mix');
         if (audioMixSelect) {
             audioMixSelect.value = s.audioMixPreset || 'auto';
             audioMixSelect.addEventListener('change', () => {
@@ -232,6 +333,48 @@ class SettingsPage {
             this.app.player.saveSettings();
         });
 
+        // Auto optimization button
+        autoOptimizeBtn?.addEventListener('click', async () => {
+            const originalText = autoOptimizeBtn.textContent;
+            autoOptimizeBtn.disabled = true;
+            autoOptimizeBtn.textContent = 'Optimizing...';
+            if (autoOptimizeFeedback) autoOptimizeFeedback.textContent = 'Applying best settings for this device...';
+
+            try {
+                const result = await API.settings.applyAutoProfile({ refreshHardware: true, force: true });
+                const applied = result?.settings || await API.settings.get();
+
+                // Sync player runtime settings so playback uses new profile immediately.
+                this.app.player.settings = { ...this.app.player.settings, ...applied };
+
+                if (hwEncoderSelect) hwEncoderSelect.value = applied.hwEncoder || 'auto';
+                if (maxResolutionSelect) maxResolutionSelect.value = applied.maxResolution || '1080p';
+                if (qualitySelect) qualitySelect.value = applied.quality || 'medium';
+                if (audioMixSelect) audioMixSelect.value = applied.audioMixPreset || 'auto';
+                if (forceProxyToggle) forceProxyToggle.checked = applied.forceProxy === true;
+                if (autoTranscodeToggle) autoTranscodeToggle.checked = applied.autoTranscode !== false;
+                if (forceTranscodeToggle) forceTranscodeToggle.checked = applied.forceTranscode === true;
+                if (forceVideoTranscodeToggle) forceVideoTranscodeToggle.checked = applied.forceVideoTranscode === true;
+                if (forceRemuxToggle) forceRemuxToggle.checked = applied.forceRemux === true;
+                if (streamFormatSelect) streamFormatSelect.value = applied.streamFormat || 'm3u8';
+                if (upscaleEnabledToggle) upscaleEnabledToggle.checked = applied.upscaleEnabled === true;
+                if (upscaleMethodSelect) upscaleMethodSelect.value = applied.upscaleMethod || 'hardware';
+                if (upscaleTargetSelect) upscaleTargetSelect.value = applied.upscaleTarget || '1080p';
+                toggleUpscaleOptions(!!applied.upscaleEnabled);
+
+                await this.loadHardwareInfo();
+                if (autoOptimizeFeedback) {
+                    autoOptimizeFeedback.textContent = applied.autoProfileSummary || 'Optimization complete.';
+                }
+            } catch (err) {
+                console.error('Auto optimization failed:', err);
+                if (autoOptimizeFeedback) autoOptimizeFeedback.textContent = `Failed: ${err.message}`;
+            } finally {
+                autoOptimizeBtn.disabled = false;
+                autoOptimizeBtn.textContent = originalText;
+            }
+        });
+
         // User-Agent handlers
         const toggleCustomInput = () => {
             if (customUaContainer) {
@@ -254,7 +397,7 @@ class SettingsPage {
     /**
      * Load and display hardware info in Transcoding tab
      */
-    async loadHardwareInfo() {
+async loadHardwareInfo() {
         const container = document.getElementById('hw-info-container');
         if (!container) return;
 
@@ -265,41 +408,50 @@ class SettingsPage {
 
             const detected = [];
 
-            // Only show detected hardware
+            // Always show CPU for software/hybrid workflows.
+            if (hwInfo.cpu?.available) {
+                const cpuLabel = `${hwInfo.cpu.model || 'CPU'} (${hwInfo.cpu.physicalCores || '?'}C/${hwInfo.cpu.logicalThreads || '?'}T)`;
+                detected.push(`<div class="hw-info-item hw-available">
+                    <span class="hw-badge">CPU</span>
+                    <span class="hw-name">${cpuLabel}</span>
+                </div>`);
+            }
+
             if (hwInfo.nvidia?.available) {
                 detected.push(`<div class="hw-info-item hw-available">
-                    <span class="hw-badge">✓ NVIDIA</span>
+                    <span class="hw-badge">NVIDIA</span>
                     <span class="hw-name">${hwInfo.nvidia.name}</span>
                 </div>`);
             }
 
             if (hwInfo.amf?.available) {
                 detected.push(`<div class="hw-info-item hw-available">
-                    <span class="hw-badge">✓ AMD</span>
+                    <span class="hw-badge">AMD</span>
                     <span class="hw-name">${hwInfo.amf.name || 'Available'}</span>
                 </div>`);
             }
 
             if (hwInfo.qsv?.available) {
                 detected.push(`<div class="hw-info-item hw-available">
-                    <span class="hw-badge">✓ Intel QSV</span>
+                    <span class="hw-badge">Intel QSV</span>
                     <span class="hw-name">Available</span>
                 </div>`);
             }
 
             if (hwInfo.vaapi?.available) {
                 detected.push(`<div class="hw-info-item hw-available">
-                    <span class="hw-badge">✓ VAAPI</span>
+                    <span class="hw-badge">VAAPI</span>
                     <span class="hw-name">${hwInfo.vaapi.device || 'Available'}</span>
                 </div>`);
             }
 
-            let html;
-            if (detected.length > 0) {
-                html = `<div class="hw-info-grid">${detected.join('')}</div>`;
-                html += `<p class="hint" style="margin-top: var(--space-sm);">Recommended encoder: <strong>${hwInfo.recommended}</strong></p>`;
-            } else {
-                html = `<p class="hint">No GPU acceleration detected. Using software encoding.</p>`;
+            let html = `<div class="hw-info-grid">${detected.join('')}</div>`;
+            html += `<p class="hint" style="margin-top: var(--space-sm);">Recommended encoder: <strong>${hwInfo.recommended || 'software'}</strong></p>`;
+            if (hwInfo.recommendedPipeline) {
+                html += `<p class="hint">Pipeline: <strong>${hwInfo.recommendedPipeline}</strong> (GPU video + CPU demux/audio/filter threads when available)</p>`;
+            }
+            if (hwInfo.cpu?.recommendedThreads) {
+                html += `<p class="hint">Recommended FFmpeg worker threads: <strong>${hwInfo.cpu.recommendedThreads}</strong></p>`;
             }
 
             container.innerHTML = html;
@@ -333,6 +485,30 @@ class SettingsPage {
                 }
             });
         }
+    }
+
+    initFirebaseCacheControls() {
+        const syncBtn = document.getElementById('firebase-cache-sync-btn');
+        if (!syncBtn) return;
+
+        syncBtn.addEventListener('click', async () => {
+            const originalLabel = syncBtn.textContent;
+            syncBtn.disabled = true;
+            syncBtn.textContent = 'Syncing...';
+
+            try {
+                const result = await API.settings.syncFirebaseCache();
+                if (result.started === false) {
+                    alert(result.message || 'Firebase sync is already running.');
+                }
+                await this.updateEpgLastRefreshed();
+            } catch (err) {
+                alert(`Firebase cache sync failed: ${err.message}`);
+            } finally {
+                syncBtn.disabled = false;
+                syncBtn.textContent = originalLabel;
+            }
+        });
     }
 
     async loadUsers() {
@@ -535,16 +711,15 @@ class SettingsPage {
     }
 
     async show() {
-        // Show users tab for admin
-        if (this.app.currentUser && this.app.currentUser.role === 'admin') {
-            const usersTab = document.getElementById('users-tab');
-            if (usersTab) {
-                usersTab.style.display = 'block';
-            }
+        // Show users tab for admin, hide for non-admin.
+        const usersTab = document.getElementById('users-tab');
+        if (usersTab) {
+            usersTab.style.display = (this.app.currentUser && this.app.currentUser.role === 'admin') ? 'block' : 'none';
         }
 
         // Load sources when page is shown
         await this.app.sourceManager.loadSources();
+        await this.loadAccountSettings();
 
         // Refresh ALL player settings from server
         if (this.app.player?.settings) {
@@ -599,13 +774,11 @@ class SettingsPage {
      */
     async updateEpgLastRefreshed() {
         const display = document.getElementById('epg-last-refreshed');
+        const firebaseDisplay = document.getElementById('firebase-cache-last-sync');
         if (!display) return;
 
         try {
-            // Fetch last sync time from server
-            const response = await fetch('/api/settings/sync-status');
-            if (!response.ok) throw new Error('Failed to fetch sync status');
-            const data = await response.json();
+            const data = await API.settings.getSyncStatus();
 
             if (data.lastSyncTime) {
                 const lastRefreshTime = new Date(data.lastSyncTime);
@@ -634,10 +807,33 @@ class SettingsPage {
                 display.textContent = 'Never';
                 display.title = 'Sync has not run yet since server started';
             }
+
+            if (firebaseDisplay) {
+                const firebaseStatus = data.firebaseCache;
+
+                if (!firebaseStatus?.enabled) {
+                    firebaseDisplay.textContent = 'Disabled (missing Firebase admin env vars)';
+                    firebaseDisplay.title = firebaseStatus?.lastError || 'Set FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY';
+                } else if (firebaseStatus.syncing) {
+                    firebaseDisplay.textContent = 'Sync in progress...';
+                    firebaseDisplay.title = firebaseStatus.nextSyncTime || '';
+                } else if (firebaseStatus.lastSyncTime) {
+                    const firebaseTime = new Date(firebaseStatus.lastSyncTime);
+                    firebaseDisplay.textContent = firebaseTime.toLocaleString();
+                    firebaseDisplay.title = `Next sync: ${firebaseStatus.nextSyncTime || 'unknown'}`;
+                } else {
+                    firebaseDisplay.textContent = 'Never';
+                    firebaseDisplay.title = firebaseStatus.nextSyncTime || 'No sync recorded yet';
+                }
+            }
         } catch (err) {
             console.error('Error fetching sync status:', err);
             display.textContent = 'Unknown';
             display.title = 'Could not fetch sync status';
+            if (firebaseDisplay) {
+                firebaseDisplay.textContent = 'Unknown';
+                firebaseDisplay.title = 'Could not fetch Firebase cache status';
+            }
         }
     }
 
@@ -647,3 +843,4 @@ class SettingsPage {
 }
 
 window.SettingsPage = SettingsPage;
+

@@ -31,8 +31,10 @@ class WatchPage {
         this.volumeSlider = document.getElementById('watch-volume');
         this.fullscreenBtn = document.getElementById('watch-fullscreen');
         this.progressSlider = document.getElementById('watch-progress');
+        this.seekPreviewEl = document.getElementById('watch-seek-preview');
         this.timeCurrent = document.getElementById('watch-time-current');
         this.timeTotal = document.getElementById('watch-time-total');
+        this.timeRemaining = document.getElementById('watch-time-remaining');
         this.scrollHint = document.getElementById('watch-scroll-hint');
         this.loadingSpinner = document.getElementById('watch-loading');
 
@@ -52,6 +54,7 @@ class WatchPage {
         this.descriptionEl = document.getElementById('watch-description');
         this.playBtn = document.getElementById('watch-play-btn');
         this.playBtnText = document.getElementById('watch-play-btn-text');
+        this.restartBtn = document.getElementById('watch-restart-btn');
         this.favoriteBtn = document.getElementById('watch-favorite-btn');
 
         // Recommended / Episodes
@@ -93,6 +96,31 @@ class WatchPage {
 
         // Watch history
         this.historyInterval = null;
+        this.probeCache = new Map();
+
+        // Smart anti-buffer state
+        this.playbackHealthInterval = null;
+        this.lastPlaybackTickAt = 0;
+        this.lastPlaybackTime = 0;
+        this.lastStallRecoverAt = 0;
+        this.consecutiveStalls = 0;
+        this.stallRecoveryTimeout = null;
+        this.lastResolvedPlaybackUrl = null;
+        this.suppressVideoErrorsUntil = 0;
+        this.lastObservedMediaTime = 0;
+        this.lastObservedWallTime = 0;
+        this.intentionalSeekUntil = 0;
+        this.systemSeekUntil = 0;
+        this.maxUnexpectedJumpSeconds = 45;
+        this.lastRateClampAt = 0;
+        this.pendingUnexpectedSeekFrom = null;
+        this.pendingUnexpectedSeekAt = 0;
+        this.isScrubbing = false;
+        this.wasPlayingBeforeScrub = false;
+        this.transcodeBaseOffset = 0;
+        this.knownDurationSeconds = 0;
+        this.currentSessionOptions = null;
+        this.sessionSeekInFlight = false;
 
         this.init();
     }
@@ -180,17 +208,38 @@ class WatchPage {
         });
 
         // Progress bar
-        this.progressSlider?.addEventListener('input', (e) => this.seek(e.target.value));
+        this.progressSlider?.addEventListener('pointerdown', () => this.startScrub());
+        this.progressSlider?.addEventListener('pointerup', () => this.commitScrubSeek());
+        this.progressSlider?.addEventListener('pointercancel', () => this.cancelScrub());
+        this.progressSlider?.addEventListener('input', (e) => this.onSeekInput(e.target.value));
+        this.progressSlider?.addEventListener('change', () => this.commitScrubSeek());
+        this.progressSlider?.addEventListener('blur', () => this.cancelScrub());
+        document.addEventListener('pointerup', () => this.commitScrubSeek());
 
         // Video events
-        this.video?.addEventListener('timeupdate', () => this.updateProgress());
+        this.video?.addEventListener('timeupdate', () => {
+            this.guardUnexpectedTimeJump();
+            this.updateProgress();
+            this.markPlaybackHealthy();
+        });
+        this.video?.addEventListener('seeking', () => this.onVideoSeeking());
+        this.video?.addEventListener('seeked', () => this.onVideoSeeked());
+        this.video?.addEventListener('ratechange', () => this.enforceNormalPlaybackRate());
         this.video?.addEventListener('loadedmetadata', () => this.onMetadataLoaded());
         this.video?.addEventListener('play', () => this.onPlay());
+        this.video?.addEventListener('playing', () => this.markPlaybackHealthy());
         this.video?.addEventListener('pause', () => this.onPause());
         this.video?.addEventListener('ended', () => this.onEnded());
         this.video?.addEventListener('error', (e) => this.onError(e));
-        this.video?.addEventListener('waiting', () => this.showLoading());
-        this.video?.addEventListener('canplay', () => this.hideLoading());
+        this.video?.addEventListener('waiting', () => {
+            this.showLoading();
+            this.handlePlaybackStall('video_waiting');
+        });
+        this.video?.addEventListener('stalled', () => this.handlePlaybackStall('video_stalled'));
+        this.video?.addEventListener('canplay', () => {
+            this.hideLoading();
+            this.markPlaybackHealthy();
+        });
 
         // Overlay auto-hide + click to toggle play
         const watchSection = document.querySelector('.watch-video-section');
@@ -209,7 +258,8 @@ class WatchPage {
         document.addEventListener('keydown', (e) => this.handleKeyboard(e));
 
         // Details section buttons
-        this.playBtn?.addEventListener('click', () => this.scrollToVideo());
+        this.playBtn?.addEventListener('click', () => this.handlePlayAction());
+        this.restartBtn?.addEventListener('click', () => this.restartFromBeginning());
         this.favoriteBtn?.addEventListener('click', () => this.toggleFavorite());
 
         // Next episode buttons
@@ -251,9 +301,11 @@ class WatchPage {
         this.seriesInfo = content.seriesInfo || null;
         this.currentSeason = content.currentSeason || null;
         this.currentEpisode = content.currentEpisode || null;
-        this.resumeTime = content.resumeTime || 0;
         this.containerExtension = content.containerExtension || 'mp4';
         this.returnPage = content.type === 'movie' ? 'movies' : 'series';
+        this.knownDurationSeconds = this.parseDurationToSeconds(
+            content.duration || content.runtime || content.totalDuration || 0
+        );
 
         // Stop any Live TV playback before starting movie/series
         this.app?.player?.stop?.();
@@ -302,11 +354,11 @@ class WatchPage {
     }
 
     /**
-     * Show Now Playing indicator in navbar
+     * Show Now Playing indicator in player header
      */
     showNowPlaying(title) {
-        const indicator = document.getElementById('now-playing-indicator');
-        const textEl = document.getElementById('now-playing-text');
+        const indicator = document.getElementById('watch-now-playing-indicator');
+        const textEl = document.getElementById('watch-now-playing-text');
         if (indicator && textEl) {
             textEl.textContent = title || 'Now Playing';
             indicator.classList.remove('hidden');
@@ -314,10 +366,10 @@ class WatchPage {
     }
 
     /**
-     * Hide Now Playing indicator in navbar
+     * Hide Now Playing indicator in player header
      */
     hideNowPlaying() {
-        const indicator = document.getElementById('now-playing-indicator');
+        const indicator = document.getElementById('watch-now-playing-indicator');
         if (indicator) {
             indicator.classList.add('hidden');
         }
@@ -334,13 +386,22 @@ class WatchPage {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     url,
-                    seekOffset: this.resumeTime, // Pass resume point to backend
+                    seekOffset: 0,
                     ...options
                 })
             });
-            if (!res.ok) throw new Error('Failed to start session');
+            if (!res.ok) {
+                let details = '';
+                try {
+                    const bodyText = await res.text();
+                    details = bodyText ? ` - ${bodyText.slice(0, 280)}` : '';
+                } catch (_) { }
+                throw new Error(`Failed to start session (${res.status})${details}`);
+            }
             const session = await res.json();
             this.currentSessionId = session.sessionId;
+            this.currentSessionOptions = { ...options };
+            this.transcodeBaseOffset = Math.max(0, Number(options.seekOffset || 0));
             return session.playlistUrl;
         } catch (err) {
             console.error('[WatchPage] Session start failed:', err);
@@ -356,13 +417,14 @@ class WatchPage {
         if (this.currentSessionId) {
             console.log('[WatchPage] Stopping transcode session:', this.currentSessionId);
             try {
-                // Fire and forget cleanup
-                fetch(`/api/transcode/${this.currentSessionId}`, { method: 'DELETE' });
+                await fetch(`/api/transcode/${this.currentSessionId}`, { method: 'DELETE' });
             } catch (err) {
                 console.error('Failed to stop session:', err);
             }
             this.currentSessionId = null;
         }
+        this.currentSessionOptions = null;
+        this.transcodeBaseOffset = 0;
     }
 
     async updateTranscodeStatus(mode, text) {
@@ -409,9 +471,67 @@ class WatchPage {
         }
     }
 
+    getCachedSettings() {
+        // Reuse already loaded player settings when possible to avoid a network round-trip
+        if (this.app?.player?.settings && typeof this.app.player.settings === 'object') {
+            return { ...this.app.player.settings };
+        }
+        return {};
+    }
+
+    async fetchProbeWithTimeout(url, ua = '', timeoutMs = 2500) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const res = await fetch(`/api/probe?url=${encodeURIComponent(url)}&ua=${encodeURIComponent(ua || '')}`, {
+                signal: controller.signal
+            });
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (err) {
+            if (err?.name === 'AbortError') {
+                console.warn(`[WatchPage] Probe timed out after ${timeoutMs}ms, continuing fast path`);
+                return null;
+            }
+            throw err;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    async getProbeInfo(url, settings, timeoutMs = 2500) {
+        const ua = settings.userAgentPreset === 'custom' ? settings.userAgentCustom : settings.userAgentPreset;
+        const cacheKey = `${url}|${ua || ''}`;
+        const cached = this.probeCache.get(cacheKey);
+        if (cached && (Date.now() - cached.at < 10 * 60 * 1000)) {
+            return cached.data;
+        }
+
+        const info = await this.fetchProbeWithTimeout(url, ua || '', timeoutMs);
+        if (info) {
+            this.probeCache.set(cacheKey, { data: info, at: Date.now() });
+        }
+        return info;
+    }
+
+    applyProbeDuration(info) {
+        const probeDuration = Number(info?.duration || 0);
+        if (!Number.isFinite(probeDuration) || probeDuration <= 0) return;
+
+        const rounded = Math.floor(probeDuration);
+        if (rounded <= 0) return;
+
+        // Prefer ffprobe duration as authoritative runtime when available.
+        this.knownDurationSeconds = rounded;
+        const current = this.getAbsoluteCurrentTime();
+        this.updateTimeLabels(current, this.getSeekableDuration());
+    }
+
     async loadVideo(url) {
         // Store the URL for copy functionality
         this.currentUrl = url;
+        this.resetAntiBufferState();
 
         // Stop any existing playback
         this.stop();
@@ -420,9 +540,11 @@ class WatchPage {
         this.showLoading();
 
         // Get settings for proxy/transcode
-        let settings = {};
+        let settings = this.getCachedSettings();
         try {
-            settings = await API.settings.get();
+            if (Object.keys(settings).length === 0) {
+                settings = await API.settings.get();
+            }
         } catch (e) {
             console.warn('Could not load settings');
         }
@@ -436,13 +558,16 @@ class WatchPage {
         if (settings.autoTranscode) {
             console.log('[WatchPage] Auto Transcode enabled. Probing stream...');
             try {
-                const ua = settings.userAgentPreset === 'custom' ? settings.userAgentCustom : settings.userAgentPreset;
-                const probeRes = await fetch(`/api/probe?url=${encodeURIComponent(url)}&ua=${encodeURIComponent(ua || '')}`);
-                const info = await probeRes.json();
+                const info = await this.getProbeInfo(url, settings, 2500);
+                if (!info) {
+                    console.log('[WatchPage] Auto probe unavailable, using fast direct path');
+                    throw new Error('Probe unavailable');
+                }
                 console.log(`[WatchPage] Probe result: video=${info.video}, audio=${info.audio}, ${info.width}x${info.height}, compatible=${info.compatible}`);
 
                 // Store early probe info for quality display
                 this.currentStreamInfo = info;
+                this.applyProbeDuration(info);
                 this.updateQualityBadge();
 
                 if (info.needsTranscode || settings.upscaleEnabled) {
@@ -457,7 +582,7 @@ class WatchPage {
                     this.updateTranscodeStatus(statusMode, statusText);
                     const playlistUrl = await this.startTranscodeSession(url, {
                         videoMode,
-                        seekOffset: this.resumeTime, // Ensure seekOffset is passed
+                        seekOffset: 0,
                         videoCodec: info.video,
                         audioCodec: info.audio,
                         audioChannels: info.audioChannels
@@ -494,7 +619,7 @@ class WatchPage {
             this.updateTranscodeStatus(statusMode, statusText);
             const playlistUrl = await this.startTranscodeSession(url, {
                 videoMode: 'encode',
-                seekOffset: this.resumeTime
+                seekOffset: 0
             });
             this.playHls(playlistUrl);
             this.setVolumeFromStorage();
@@ -508,16 +633,15 @@ class WatchPage {
             // Probe to get video codec for HEVC tag handling
             let videoCodec = 'unknown';
             try {
-                const ua = settings.userAgentPreset === 'custom' ? settings.userAgentCustom : settings.userAgentPreset;
-                const probeRes = await fetch(`/api/probe?url=${encodeURIComponent(url)}&ua=${encodeURIComponent(ua || '')}`);
-                const info = await probeRes.json();
-                videoCodec = info.video;
+                const info = await this.getProbeInfo(url, settings, 1500);
+                if (info?.video) videoCodec = info.video;
+                this.applyProbeDuration(info);
             } catch (e) { console.warn('Probe failed for force audio, assuming h264'); }
 
             const playlistUrl = await this.startTranscodeSession(url, {
                 videoMode: 'copy',
                 videoCodec,
-                seekOffset: this.resumeTime
+                seekOffset: 0
             });
             this.playHls(playlistUrl);
             this.setVolumeFromStorage();
@@ -564,6 +688,8 @@ class WatchPage {
      * Play HLS stream using Hls.js
      */
     playHls(url) {
+        this.lastResolvedPlaybackUrl = url;
+
         if (this.hls) {
             this.hls.destroy();
         }
@@ -571,6 +697,12 @@ class WatchPage {
         this.hls = new Hls({
             maxBufferLength: 30,
             maxMaxBufferLength: 60,
+            maxBufferHole: 1.0,
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 10,
+            lowLatencyMode: false,
+            nudgeOffset: 0.2,
+            nudgeMaxRetry: 6,
             startLevel: -1,
             enableWorker: true,
         });
@@ -593,9 +725,18 @@ class WatchPage {
             this.video.play().catch(e => {
                 if (e.name !== 'AbortError') console.error('[WatchPage] Autoplay error:', e);
             });
+
+            this.startPlaybackHealthMonitor();
         });
 
         this.hls.on(Hls.Events.ERROR, (event, data) => {
+            if (!data?.fatal) {
+                if (data?.details === 'bufferStalledError') {
+                    this.handlePlaybackStall('hls_buffer_stalled');
+                }
+                return;
+            }
+
             if (data.fatal) {
                 console.error('[WatchPage] HLS fatal error:', data);
                 // Try proxy on CORS error (only if not already proxied/transcoded)
@@ -603,10 +744,21 @@ class WatchPage {
                 if (!url.startsWith('/api/') && (data.type === Hls.ErrorTypes.NETWORK_ERROR)) {
                     console.log('[WatchPage] Retrying via proxy...');
                     this.playHls(`/api/proxy/stream?url=${encodeURIComponent(this.currentUrl)}`);
+                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    this.handlePlaybackStall('hls_media_error');
+                    this.hls.recoverMediaError();
                 } else {
-                    this.hls.destroy();
+                    this.handlePlaybackStall('hls_fatal');
                 }
             }
+        });
+
+        this.hls.on(Hls.Events.BUFFER_STALLED_ERROR, () => {
+            this.handlePlaybackStall('hls_buffer_stalled_event');
+        });
+
+        this.hls.on(Hls.Events.FRAG_LOADED, () => {
+            this.markPlaybackHealthy();
         });
     }
 
@@ -620,6 +772,7 @@ class WatchPage {
         // Stop history tracking and save final progress
         this.stopHistoryTracking();
         this.saveProgress();
+        this.stopPlaybackHealthMonitor();
 
         // Cleanup transcode session if exists
         this.stopTranscodeSession();
@@ -635,9 +788,18 @@ class WatchPage {
             this.hls.destroy();
             this.hls = null;
         }
+
+        if (this.stallRecoveryTimeout) {
+            clearTimeout(this.stallRecoveryTimeout);
+            this.stallRecoveryTimeout = null;
+        }
+
         if (this.video) {
+            this.suppressVideoErrorsUntil = Date.now() + 1500;
+            this.video.playbackRate = 1;
+            this.video.defaultPlaybackRate = 1;
             this.video.pause();
-            this.video.src = '';
+            this.video.removeAttribute('src');
             this.video.load();
         }
 
@@ -656,14 +818,72 @@ class WatchPage {
 
     skip(seconds) {
         if (this.video) {
-            this.video.currentTime = Math.max(0, Math.min(this.video.currentTime + seconds, this.video.duration || 0));
+            const targetAbsolute = this.getAbsoluteCurrentTime() + Number(seconds || 0);
+            const duration = this.getSeekableDuration();
+            const clamped = Math.max(0, Math.min(targetAbsolute, duration > 0 ? duration : targetAbsolute));
+            this.seekToAbsolute(clamped);
         }
     }
 
     seek(percent) {
-        if (this.video && this.video.duration) {
-            this.video.currentTime = (percent / 100) * this.video.duration;
+        const duration = this.getSeekableDuration();
+        if (this.video && duration > 0) {
+            const targetAbsolute = (Number(percent) / 100) * duration;
+            this.seekToAbsolute(targetAbsolute);
         }
+    }
+
+    startScrub() {
+        if (!this.video || this.getSeekableDuration() <= 0) return;
+        this.isScrubbing = true;
+        this.wasPlayingBeforeScrub = !this.video.paused;
+        this.progressSlider?.parentElement?.classList.add('scrubbing');
+        this.seekPreviewEl?.classList.remove('hidden');
+        this.showOverlay();
+    }
+
+    onSeekInput(percent) {
+        const value = Number(percent);
+        const duration = this.getSeekableDuration();
+        if (!this.video || duration <= 0 || !Number.isFinite(value)) return;
+
+        const clamped = Math.max(0, Math.min(100, value));
+        this.updateSeekVisual(clamped);
+        const previewSeconds = (clamped / 100) * duration;
+        this.updateTimeLabels(previewSeconds, duration);
+        if (this.seekPreviewEl) {
+            this.seekPreviewEl.textContent = this.formatTime(previewSeconds);
+        }
+
+        if (!this.isScrubbing) {
+            this.seek(clamped);
+        }
+    }
+
+    commitScrubSeek() {
+        if (!this.isScrubbing) return;
+        const duration = this.getSeekableDuration();
+        if (!this.video || duration <= 0) {
+            this.cancelScrub();
+            return;
+        }
+
+        const value = Number(this.progressSlider?.value || 0);
+        const clamped = Math.max(0, Math.min(100, value));
+        this.seek(clamped);
+
+        this.isScrubbing = false;
+        this.progressSlider?.parentElement?.classList.remove('scrubbing');
+        this.seekPreviewEl?.classList.add('hidden');
+        this.updateProgress();
+    }
+
+    cancelScrub() {
+        if (!this.isScrubbing) return;
+        this.isScrubbing = false;
+        this.progressSlider?.parentElement?.classList.remove('scrubbing');
+        this.seekPreviewEl?.classList.add('hidden');
+        this.updateProgress();
     }
 
     toggleMute() {
@@ -768,18 +988,24 @@ class WatchPage {
     // === UI Updates ===
 
     updateProgress() {
-        if (!this.video || !this.video.duration) return;
+        if (!this.video) return;
 
-        const percent = (this.video.currentTime / this.video.duration) * 100;
+        if (this.isScrubbing) return;
+
+        const duration = this.getSeekableDuration();
+        if (duration <= 0) return;
+
+        const currentAbsolute = this.getAbsoluteCurrentTime();
+        const percent = (currentAbsolute / duration) * 100;
         this.progressSlider.value = percent;
-        this.timeCurrent.textContent = this.formatTime(this.video.currentTime);
+        this.updateSeekVisual(percent);
+        this.updateTimeLabels(currentAbsolute, duration);
 
         // Show "Up Next" panel early for series (like streaming services do during credits)
         // Only show if auto-play next episode is enabled
         const autoPlayEnabled = this.app?.player?.settings?.autoPlayNextEpisode;
         if (autoPlayEnabled && this.contentType === 'series' && this.seriesInfo && !this.nextEpisodeShowing && !this.nextEpisodeDismissed) {
-            const duration = this.video.duration;
-            const currentTime = this.video.currentTime;
+            const currentTime = currentAbsolute;
 
             // Only proceed if we have reliable duration data
             if (isFinite(duration) && duration >= 180 && currentTime >= 120) {
@@ -798,6 +1024,13 @@ class WatchPage {
     }
 
     onMetadataLoaded() {
+        this.enforceNormalPlaybackRate(true);
+        this.lastObservedMediaTime = this.video?.currentTime || 0;
+        this.lastObservedWallTime = Date.now();
+        this.updateSeekVisual(0);
+        const total = this.getSeekableDuration();
+        if (total > 0) this.updateTimeLabels(this.getAbsoluteCurrentTime(), total);
+
         // Detect resolution
         if (this.video && this.video.videoHeight > 0) {
             this.currentStreamInfo = {
@@ -807,19 +1040,12 @@ class WatchPage {
             this.updateQualityBadge();
         }
 
-        // Handle resumption
-        if (this.resumeTime > 0 && this.video) {
-            const duration = this.video.duration;
-            // Only resume if not near the end (95%)
-            if (!duration || this.resumeTime < duration * 0.95) {
-                console.log(`[WatchPage] Resuming at ${this.resumeTime}s`);
-                this.video.currentTime = this.resumeTime;
-            }
-            this.resumeTime = 0; // Reset after use
-        }
+        // Metadata hook reserved for quality badge only.
     }
 
     onPlay() {
+        this.enforceNormalPlaybackRate(true);
+
         // Update play/pause button icons
         this.playPauseBtn?.querySelector('.icon-play')?.classList.add('hidden');
         this.playPauseBtn?.querySelector('.icon-pause')?.classList.remove('hidden');
@@ -827,6 +1053,9 @@ class WatchPage {
 
         // Start overlay auto-hide
         this.startOverlayTimer();
+        if (!this.isScrubbing) {
+            this.seekPreviewEl?.classList.add('hidden');
+        }
     }
 
     onPause() {
@@ -852,7 +1081,20 @@ class WatchPage {
     }
 
     onError(e) {
-        // Only log actual fatal errors, not benign stream recovery events
+        // Ignore teardown noise (e.g. clearing src while stopping player)
+        if (Date.now() < this.suppressVideoErrorsUntil) {
+            return;
+        }
+
+        const srcAttr = this.video?.getAttribute('src');
+        const hasNoSource = !srcAttr && !this.video?.currentSrc;
+
+        // Ignore benign "Empty src attribute" errors after source cleanup.
+        if (this.video?.error?.code === 4 && hasNoSource) {
+            return;
+        }
+
+        // Log actual playback errors
         const error = this.video?.error;
         if (error && error.code) {
             console.error('[WatchPage] Video error:', error.code, error.message);
@@ -863,6 +1105,129 @@ class WatchPage {
         const isMuted = this.video?.muted || this.video?.volume === 0;
         this.muteBtn?.querySelector('.icon-vol')?.classList.toggle('hidden', isMuted);
         this.muteBtn?.querySelector('.icon-muted')?.classList.toggle('hidden', !isMuted);
+    }
+
+    updateSeekVisual(percent) {
+        if (!this.progressSlider) return;
+        const safe = Math.max(0, Math.min(100, Number(percent) || 0));
+        const pct = `${safe}%`;
+        const container = this.progressSlider.parentElement;
+        if (container) {
+            container.style.setProperty('--seek-progress', pct);
+        }
+    }
+
+    updateTimeLabels(currentSeconds, totalSeconds) {
+        if (this.timeCurrent) {
+            this.timeCurrent.textContent = this.formatTime(currentSeconds);
+        }
+        if (this.timeTotal) {
+            this.timeTotal.textContent = this.formatTime(totalSeconds);
+        }
+        if (this.timeRemaining) {
+            const remaining = Math.max(0, Number(totalSeconds || 0) - Number(currentSeconds || 0));
+            this.timeRemaining.textContent = `-${this.formatTime(remaining)}`;
+        }
+    }
+
+    getAbsoluteCurrentTime() {
+        const localTime = Number(this.video?.currentTime || 0);
+        return Math.max(0, this.transcodeBaseOffset + localTime);
+    }
+
+    getSeekableDuration() {
+        const mediaDuration = Number(this.video?.duration || 0);
+        if (this.knownDurationSeconds > 0) {
+            return Math.max(this.knownDurationSeconds, this.transcodeBaseOffset + Math.max(0, mediaDuration));
+        }
+        if (mediaDuration > 0) {
+            return Math.max(mediaDuration, this.transcodeBaseOffset + mediaDuration);
+        }
+        return 0;
+    }
+
+    isBufferedAtAbsoluteTime(targetSeconds, padding = 1.5) {
+        if (!this.video || !this.video.buffered || this.video.buffered.length === 0) return false;
+        const localTarget = Math.max(0, Number(targetSeconds || 0) - this.transcodeBaseOffset);
+        for (let i = 0; i < this.video.buffered.length; i++) {
+            const start = this.video.buffered.start(i) - padding;
+            const end = this.video.buffered.end(i) + padding;
+            if (localTarget >= start && localTarget <= end) return true;
+        }
+        return false;
+    }
+
+    async seekToAbsolute(targetSeconds) {
+        if (!this.video) return;
+
+        const duration = this.getSeekableDuration();
+        const clampedTarget = Math.max(0, Math.min(Number(targetSeconds || 0), duration > 0 ? duration : Number(targetSeconds || 0)));
+        const localTarget = Math.max(0, clampedTarget - this.transcodeBaseOffset);
+
+        this.markIntentionalSeek(3000);
+
+        const canSeekLocally = !this.currentSessionId ||
+            Math.abs(localTarget - (this.video.currentTime || 0)) <= 20 ||
+            this.isBufferedAtAbsoluteTime(clampedTarget);
+
+        if (canSeekLocally) {
+            const localDuration = Number(this.video.duration || 0);
+            this.video.currentTime = Math.max(0, Math.min(localTarget, localDuration > 0 ? localDuration : localTarget));
+            return;
+        }
+
+        if (this.sessionSeekInFlight || !this.currentSessionOptions) return;
+
+        this.sessionSeekInFlight = true;
+        this.showLoading();
+        this.markSystemSeek(6000);
+        try {
+            const sessionOptions = { ...this.currentSessionOptions, seekOffset: Math.floor(clampedTarget) };
+            await this.stopTranscodeSession();
+            const playlistUrl = await this.startTranscodeSession(this.currentUrl, sessionOptions);
+            this.playHls(playlistUrl);
+            this.setVolumeFromStorage();
+        } catch (err) {
+            console.warn('[WatchPage] Session seek failed, falling back to local seek:', err.message);
+            this.video.currentTime = Math.max(0, localTarget);
+        } finally {
+            this.sessionSeekInFlight = false;
+        }
+    }
+
+    parseDurationToSeconds(value) {
+        if (value === null || value === undefined) return 0;
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+            return value > 3600 * 12 ? Math.floor(value / 1000) : Math.floor(value);
+        }
+
+        const text = String(value).trim();
+        if (!text) return 0;
+
+        if (/^\d+(\.\d+)?$/.test(text)) {
+            const n = Number(text);
+            if (Number.isFinite(n) && n > 0) return Math.floor(n);
+        }
+
+        const parts = text.split(':').map(s => Number(s));
+        if (parts.length === 3 && parts.every(Number.isFinite)) {
+            return Math.max(0, Math.floor(parts[0] * 3600 + parts[1] * 60 + parts[2]));
+        }
+        if (parts.length === 2 && parts.every(Number.isFinite)) {
+            return Math.max(0, Math.floor(parts[0] * 60 + parts[1]));
+        }
+
+        const h = text.match(/(\d+(?:\.\d+)?)\s*h/i);
+        const m = text.match(/(\d+(?:\.\d+)?)\s*m/i);
+        const s = text.match(/(\d+(?:\.\d+)?)\s*s/i);
+        if (h || m || s) {
+            const hh = h ? Number(h[1]) : 0;
+            const mm = m ? Number(m[1]) : 0;
+            const ss = s ? Number(s[1]) : 0;
+            return Math.max(0, Math.floor(hh * 3600 + mm * 60 + ss));
+        }
+
+        return 0;
     }
 
     formatTime(seconds) {
@@ -885,6 +1250,280 @@ class WatchPage {
 
     hideLoading() {
         this.loadingSpinner?.classList.remove('show');
+    }
+
+    resetAntiBufferState() {
+        this.consecutiveStalls = 0;
+        this.lastPlaybackTime = 0;
+        this.lastPlaybackTickAt = Date.now();
+        this.lastStallRecoverAt = 0;
+        this.lastResolvedPlaybackUrl = null;
+        this.lastObservedMediaTime = 0;
+        this.lastObservedWallTime = 0;
+        this.intentionalSeekUntil = 0;
+        this.systemSeekUntil = 0;
+        this.pendingUnexpectedSeekFrom = null;
+        this.pendingUnexpectedSeekAt = 0;
+    }
+
+    markIntentionalSeek(windowMs = 2500) {
+        this.intentionalSeekUntil = Date.now() + Math.max(500, windowMs);
+    }
+
+    markSystemSeek(windowMs = 2500) {
+        this.systemSeekUntil = Date.now() + Math.max(500, windowMs);
+    }
+
+    isSeekExpected() {
+        const now = Date.now();
+        return now <= this.intentionalSeekUntil || now <= this.systemSeekUntil;
+    }
+
+    onVideoSeeking() {
+        if (!this.video) return;
+
+        if (this.isSeekExpected()) {
+            this.pendingUnexpectedSeekFrom = null;
+            this.pendingUnexpectedSeekAt = 0;
+        } else {
+            // Capture where the player was before an unexpected seek so we can validate the final jump.
+            this.pendingUnexpectedSeekFrom = Number(this.lastObservedMediaTime || 0);
+            this.pendingUnexpectedSeekAt = Date.now();
+        }
+
+        this.lastObservedMediaTime = this.video.currentTime || 0;
+        this.lastObservedWallTime = Date.now();
+    }
+
+    onVideoSeeked() {
+        if (!this.video) return;
+
+        // Stall recovery and HLS media recovery can trigger legitimate internal seeks.
+        // Give those a short grace window to avoid fighting the player.
+        const now = Date.now();
+        if (now - this.lastStallRecoverAt < 4500) {
+            this.markSystemSeek(2500);
+            this.pendingUnexpectedSeekFrom = null;
+            this.pendingUnexpectedSeekAt = 0;
+            this.lastObservedMediaTime = Number(this.video.currentTime || 0);
+            this.lastObservedWallTime = now;
+            return;
+        }
+
+        if (this.isSeekExpected()) {
+            this.pendingUnexpectedSeekFrom = null;
+            this.pendingUnexpectedSeekAt = 0;
+            this.lastObservedMediaTime = Number(this.video.currentTime || 0);
+            this.lastObservedWallTime = now;
+            return;
+        }
+
+        if (!Number.isFinite(this.pendingUnexpectedSeekFrom)) {
+            this.lastObservedMediaTime = Number(this.video.currentTime || 0);
+            this.lastObservedWallTime = Date.now();
+            return;
+        }
+
+        const from = Number(this.pendingUnexpectedSeekFrom || 0);
+        const to = Number(this.video.currentTime || 0);
+        const delta = to - from;
+        const jumpedForward = delta > Math.max(12, this.maxUnexpectedJumpSeconds);
+        const jumpedBack = delta < -12;
+
+        this.pendingUnexpectedSeekFrom = null;
+        this.pendingUnexpectedSeekAt = 0;
+
+        if (!(jumpedForward || jumpedBack)) {
+            this.lastObservedMediaTime = to;
+            this.lastObservedWallTime = now;
+            return;
+        }
+
+        const duration = Number(this.video.duration || 0);
+        const safeTarget = Math.max(0, Math.min(
+            from + 1,
+            Number.isFinite(duration) && duration > 0 ? duration - 0.5 : from + 1
+        ));
+
+        console.warn(`[WatchPage] Reverting unexpected seek completion (${delta.toFixed(2)}s) to ${safeTarget.toFixed(2)}s`);
+        this.markSystemSeek(1800);
+        try {
+            this.video.currentTime = safeTarget;
+        } catch (err) {
+            console.warn('[WatchPage] Failed to revert unexpected seek completion:', err.message);
+        }
+        this.lastObservedMediaTime = safeTarget;
+        this.lastObservedWallTime = now;
+    }
+
+    enforceNormalPlaybackRate(force = false) {
+        if (!this.video) return;
+
+        const rate = Number(this.video.playbackRate);
+        if (!Number.isFinite(rate)) return;
+        if (Math.abs(rate - 1) < 0.001) return;
+
+        const now = Date.now();
+        if (!force && now - this.lastRateClampAt < 400) return;
+
+        this.lastRateClampAt = now;
+        console.warn(`[WatchPage] Correcting unexpected playbackRate ${rate} -> 1`);
+        this.video.playbackRate = 1;
+        this.video.defaultPlaybackRate = 1;
+    }
+
+    guardUnexpectedTimeJump() {
+        if (!this.video || this.video.seeking || this.video.paused) return;
+
+        const now = Date.now();
+        const currentTime = Number(this.video.currentTime || 0);
+
+        if (!this.lastObservedWallTime) {
+            this.lastObservedWallTime = now;
+            this.lastObservedMediaTime = currentTime;
+            return;
+        }
+
+        const elapsedWall = Math.max(0.001, (now - this.lastObservedWallTime) / 1000);
+        const deltaMedia = currentTime - this.lastObservedMediaTime;
+        const expectedMaxForward = Math.max(6, elapsedWall * 4 + 2);
+        const jumpedForward = deltaMedia > Math.max(expectedMaxForward, this.maxUnexpectedJumpSeconds);
+        const jumpedBack = deltaMedia < -12;
+
+        if (!this.isSeekExpected() && (jumpedForward || jumpedBack)) {
+            const safeTarget = Math.max(0, this.lastObservedMediaTime + Math.min(2, elapsedWall * 1.5));
+            console.warn(`[WatchPage] Reverting unexpected time jump (${deltaMedia.toFixed(2)}s) to ${safeTarget.toFixed(2)}s`);
+            this.markSystemSeek(1800);
+            try {
+                this.video.currentTime = safeTarget;
+            } catch (err) {
+                console.warn('[WatchPage] Failed to revert unexpected jump:', err.message);
+            }
+            this.lastObservedMediaTime = safeTarget;
+            this.lastObservedWallTime = now;
+            return;
+        }
+
+        this.lastObservedMediaTime = currentTime;
+        this.lastObservedWallTime = now;
+    }
+
+    startPlaybackHealthMonitor() {
+        this.stopPlaybackHealthMonitor();
+        this.lastPlaybackTickAt = Date.now();
+        this.lastPlaybackTime = this.video?.currentTime || 0;
+
+        this.playbackHealthInterval = setInterval(() => {
+            if (!this.video || this.video.paused || this.video.ended || this.video.seeking) return;
+
+            const now = Date.now();
+            const currentTime = this.video.currentTime || 0;
+            const moved = Math.abs(currentTime - this.lastPlaybackTime) >= 0.1;
+            const frozenTooLong = !moved && now - this.lastPlaybackTickAt > 3500;
+            const lowReadyState = this.video.readyState <= 2;
+
+            if (lowReadyState || frozenTooLong) {
+                this.handlePlaybackStall(lowReadyState ? 'health_low_ready_state' : 'health_frozen_playhead');
+                return;
+            }
+
+            this.markPlaybackHealthy();
+        }, 1500);
+    }
+
+    stopPlaybackHealthMonitor() {
+        if (this.playbackHealthInterval) {
+            clearInterval(this.playbackHealthInterval);
+            this.playbackHealthInterval = null;
+        }
+    }
+
+    markPlaybackHealthy() {
+        if (!this.video || this.video.paused || this.video.seeking) return;
+
+        const now = Date.now();
+        const currentTime = this.video.currentTime || 0;
+
+        if (Math.abs(currentTime - this.lastPlaybackTime) >= 0.1) {
+            this.lastPlaybackTime = currentTime;
+            this.lastPlaybackTickAt = now;
+            if (this.consecutiveStalls > 0 && (now - this.lastStallRecoverAt > 1500)) {
+                this.consecutiveStalls -= 1;
+            }
+        }
+    }
+
+    getBufferedAhead() {
+        if (!this.video || !this.video.buffered || this.video.buffered.length === 0) return 0;
+
+        const t = this.video.currentTime;
+        for (let i = 0; i < this.video.buffered.length; i++) {
+            const start = this.video.buffered.start(i);
+            const end = this.video.buffered.end(i);
+            if (t >= start && t <= end) {
+                return Math.max(0, end - t);
+            }
+        }
+
+        return 0;
+    }
+
+    handlePlaybackStall(reason) {
+        if (!this.video || this.video.paused || this.video.seeking) return;
+
+        const now = Date.now();
+        if (now - this.lastStallRecoverAt < 1000) return;
+
+        this.lastStallRecoverAt = now;
+        this.consecutiveStalls = Math.min(this.consecutiveStalls + 1, 8);
+        console.warn(`[WatchPage] Stall detected (${reason}), attempt ${this.consecutiveStalls}`);
+
+        if (this.stallRecoveryTimeout) {
+            clearTimeout(this.stallRecoveryTimeout);
+        }
+
+        this.stallRecoveryTimeout = setTimeout(() => this.runStallRecovery(), 200);
+    }
+
+    runStallRecovery() {
+        if (!this.video || this.video.paused || this.video.seeking) return;
+
+        const bufferedAhead = this.getBufferedAhead();
+        if (bufferedAhead > 0.75) {
+            const nudge = Math.min(0.35, bufferedAhead - 0.25);
+            if (nudge > 0.05) {
+                try {
+                    this.markSystemSeek(2000);
+                    this.video.currentTime += nudge;
+                } catch (e) {
+                    console.warn('[WatchPage] Stall nudge failed:', e.message);
+                }
+            }
+        }
+
+        if (!this.hls) return;
+
+        if (this.consecutiveStalls >= 2 && this.hls.autoLevelEnabled) {
+            const currentLevel = this.hls.nextAutoLevel >= 0 ? this.hls.nextAutoLevel : this.hls.currentLevel;
+            if (currentLevel > 0) {
+                this.hls.nextLevel = currentLevel - 1;
+                console.log(`[WatchPage] Lowering quality to level ${currentLevel - 1} to reduce buffering`);
+            }
+        }
+
+        if (this.consecutiveStalls >= 3) {
+            this.markSystemSeek(3000);
+            this.hls.recoverMediaError();
+        }
+
+        const reloadFrom = Math.max((this.video.currentTime || 0) - 1, 0);
+        this.markSystemSeek(4000);
+        this.hls.startLoad(reloadFrom);
+
+        if (this.consecutiveStalls >= 5 && this.lastResolvedPlaybackUrl) {
+            console.warn('[WatchPage] Reinitializing HLS player after repeated stalls');
+            this.playHls(this.lastResolvedPlaybackUrl);
+        }
     }
 
     // === Captions ===
@@ -995,11 +1634,13 @@ class WatchPage {
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
+                if (e.repeat) break;
                 this.skip(-10);
                 this.showOverlay();
                 break;
             case 'ArrowRight':
                 e.preventDefault();
+                if (e.repeat) break;
                 this.skip(10);
                 this.showOverlay();
                 break;
@@ -1040,7 +1681,7 @@ class WatchPage {
         if (!this.content) return;
 
         const isChannel = this.content.type === 'channel' || !this.content.type; // Default to channel if unknown
-        const fallback = isChannel ? '/img/placeholder.png' : '/img/poster-placeholder.jpg';
+        const fallback = isChannel ? '/img/LurkedTV.png' : '/img/LurkedTV.png';
 
         this.posterEl.onerror = () => {
             this.posterEl.onerror = null;
@@ -1053,10 +1694,8 @@ class WatchPage {
         this.ratingEl.textContent = this.content.rating ? `★ ${this.content.rating}` : '';
         this.descriptionEl.textContent = this.content.description || '';
 
-        // Update play button text
-        if (this.playBtnText) {
-            this.playBtnText.textContent = 'Play';
-        }
+        if (this.playBtnText) this.playBtnText.textContent = 'Play';
+        this.restartBtn?.classList.add('hidden');
     }
 
     async checkFavorite() {
@@ -1108,6 +1747,25 @@ class WatchPage {
         }
     }
 
+    handlePlayAction() {
+        this.scrollToVideo();
+    }
+
+    restartFromBeginning() {
+        this.scrollToVideo();
+
+        if (this.video) {
+            this.markIntentionalSeek(3000);
+            this.video.currentTime = 0;
+            this.video.play().catch(console.error);
+        }
+
+        if (this.playBtnText) {
+            this.playBtnText.textContent = 'Play';
+        }
+        this.restartBtn?.classList.add('hidden');
+    }
+
     // === Recommended Movies ===
 
     async loadRecommended(sourceId, categoryId) {
@@ -1140,9 +1798,9 @@ class WatchPage {
 
         this.recommendedGrid.innerHTML = movies.map(movie => `
             <div class="watch-recommended-card" data-id="${movie.stream_id}" data-source="${sourceId}">
-                <img src="${movie.stream_icon || movie.cover || '/img/placeholder.png'}" 
+                <img src="${movie.stream_icon || movie.cover || '/img/LurkedTV.png'}" 
                      alt="${movie.name}" 
-                     onerror="this.onerror=null;this.src='/img/placeholder.png'" loading="lazy">
+                     onerror="this.onerror=null;this.src='/img/LurkedTV.png'" loading="lazy">
                 <p>${movie.name}</p>
             </div>
         `).join('');
@@ -1173,6 +1831,7 @@ class WatchPage {
                     description: movie.plot || '',
                     year: movie.year,
                     rating: movie.rating,
+                    duration: movie.duration || movie.runtime || '',
                     sourceId: sourceId,
                     categoryId: movie.category_id
                 }, result.url);
@@ -1257,6 +1916,7 @@ class WatchPage {
                     description: this.content.description,
                     year: this.content.year,
                     rating: this.content.rating,
+                    duration: episodeEl.querySelector('.watch-episode-duration')?.textContent?.trim() || '',
                     sourceId: this.content.sourceId,
                     seriesId: this.content.seriesId,
                     seriesInfo: this.seriesInfo,
@@ -1348,6 +2008,7 @@ class WatchPage {
                     description: this.content.description,
                     year: this.content.year,
                     rating: this.content.rating,
+                    duration: nextEp.duration || '',
                     sourceId: this.content.sourceId,
                     seriesId: this.content.seriesId,
                     seriesInfo: this.seriesInfo,
@@ -1407,10 +2068,10 @@ class WatchPage {
     }
 
     async saveProgress() {
-        if (!this.content || !this.video || this.video.paused) return;
+        if (!this.content || !this.video) return;
 
-        const progress = Math.floor(this.video.currentTime);
-        const duration = Math.floor(this.video.duration);
+        const progress = Math.floor(this.getAbsoluteCurrentTime());
+        const duration = Math.floor(this.getSeekableDuration());
 
         if (isNaN(progress) || isNaN(duration) || duration <= 0) return;
 
@@ -1442,3 +2103,4 @@ class WatchPage {
 }
 
 window.WatchPage = WatchPage;
+

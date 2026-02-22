@@ -1,14 +1,39 @@
 const express = require('express');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 const path = require('path');
 const passport = require('passport');
 const syncService = require('./services/syncService');
+const firebaseCacheSync = require('./services/firebaseCacheSync');
 
 // Initialize database
-require('./db');
+const dbStore = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const startupAt = Date.now();
+
+function clearConsole() {
+    if (process.stdout.isTTY && process.env.NO_CLEAR !== '1') {
+        process.stdout.write('\x1Bc');
+    }
+}
+
+function startupLog(message) {
+    console.log(`[Startup] ${message}`);
+}
+
+function startupDivider(title = '') {
+    const line = '============================================================';
+    console.log(line);
+    if (title) {
+        console.log(`[Startup] ${title}`);
+        console.log(line);
+    }
+}
+
+// Keep startup output readable during dev restarts
+clearConsole();
+startupDivider('LurkedTv Server Boot');
 
 // Trust proxy headers (X-Forwarded-Proto, X-Forwarded-For, etc.)
 // Required for correct protocol detection behind reverse proxies (nginx, Caddy, etc.)
@@ -27,7 +52,16 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// In production (NODE_ENV=production) serve the pre-built dist/ directory.
+// In development the Express server still serves public/ directly; Vite (port 5173)
+// is the recommended dev entry point and proxies /api requests here.
+const distDir = path.join(__dirname, '..', 'dist');
+const publicDir = path.join(__dirname, '..', 'public');
+const frontendDir = (process.env.NODE_ENV === 'production' && fs.existsSync(distDir))
+  ? distDir
+  : publicDir;
+
+app.use(express.static(frontendDir));
 
 // FFMPEG Configuration (optional - for transcoding support)
 // Priority: 1. System FFmpeg (better Docker DNS support), 2. ffmpeg-static npm package
@@ -37,7 +71,7 @@ function findFFmpeg() {
     // Try system FFmpeg first (better Docker compatibility)
     try {
         execSync('ffmpeg -version', { stdio: 'ignore' });
-        console.log('FFmpeg binary configured at: ffmpeg (system)');
+        startupLog('FFmpeg binary: ffmpeg (system)');
         return 'ffmpeg';
     } catch (e) {
         // System FFmpeg not found, try ffmpeg-static
@@ -51,11 +85,11 @@ function findFFmpeg() {
         if (ffmpegPath && ffmpegPath.includes('app.asar')) {
             ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
         }
-        console.log('FFmpeg binary configured at:', ffmpegPath);
+        startupLog(`FFmpeg binary: ${ffmpegPath}`);
         return ffmpegPath;
     } catch (err) {
-        console.warn('FFmpeg not available - transcoding/remuxing will be disabled.');
-        console.warn('Install FFmpeg via your package manager or npm install ffmpeg-static');
+        console.warn('[Startup] FFmpeg not available - transcoding/remuxing disabled.');
+        console.warn('[Startup] Install FFmpeg via your package manager or npm install ffmpeg-static');
         return null;
     }
 }
@@ -64,7 +98,7 @@ function findFFprobe() {
     // Try system ffprobe first
     try {
         execSync('ffprobe -version', { stdio: 'ignore' });
-        console.log('FFprobe binary configured at: ffprobe (system)');
+        startupLog('FFprobe binary: ffprobe (system)');
         return 'ffprobe';
     } catch (e) {
         // Not found in system
@@ -74,14 +108,14 @@ function findFFprobe() {
     try {
         const ffprobePath = require('@ffprobe-installer/ffprobe').path;
         if (ffprobePath) {
-            console.log('FFprobe binary configured at:', ffprobePath);
+            startupLog(`FFprobe binary: ${ffprobePath}`);
             return ffprobePath;
         }
     } catch (err) {
         // Package not available
     }
 
-    console.warn('FFprobe not available - auto transcode will fallback to always transcode');
+    console.warn('[Startup] FFprobe not available - auto transcode falls back to always transcode');
     return null;
 }
 
@@ -133,17 +167,17 @@ async function loadPlugins() {
                         // Direct function export (sync or async)
                         await plugin(app, services);
                         loadedPlugins.push({ name: file, plugin: null });
-                        console.log(`✓ Loaded plugin: ${file}`);
+                        console.log(`[Plugin] Loaded: ${file}`);
                     } else if (plugin && typeof plugin.init === 'function') {
                         // Object export with init/shutdown lifecycle
                         await plugin.init(app, services);
                         loadedPlugins.push({ name: file, plugin });
-                        console.log(`✓ Loaded plugin: ${file} (with lifecycle hooks)`);
+                        console.log(`[Plugin] Loaded: ${file} (lifecycle hooks)`);
                     } else {
-                        console.warn(`⚠ Plugin ${file} does not export a function or object with init(), skipping.`);
+                        console.warn(`[Plugin] ${file} does not export a function or object with init(); skipped.`);
                     }
                 } catch (err) {
-                    console.error(`✗ Failed to load plugin ${file}:`, err);
+                    console.error(`[Plugin] Failed to load ${file}:`, err);
                 }
             }
         }
@@ -154,14 +188,14 @@ async function loadPlugins() {
 
 // Graceful shutdown handler for plugins with shutdown hooks
 process.on('SIGTERM', async () => {
-    console.log('SIGTERM received, shutting down plugins...');
+    console.log('[Startup] SIGTERM received, shutting down plugins...');
     for (const { name, plugin } of loadedPlugins) {
         if (plugin && typeof plugin.shutdown === 'function') {
             try {
                 await plugin.shutdown();
-                console.log(`✓ Shutdown plugin: ${name}`);
+                console.log(`[Plugin] Shutdown: ${name}`);
             } catch (err) {
-                console.error(`✗ Error shutting down plugin ${name}:`, err);
+                console.error(`[Plugin] Shutdown error for ${name}:`, err);
             }
         }
     }
@@ -189,7 +223,7 @@ app.get('/api/version', (req, res) => {
 
 // SPA fallback - serve index.html for all non-API routes
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+    res.sendFile(path.join(frontendDir, 'index.html'));
 });
 
 // Error handling
@@ -199,11 +233,12 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, async () => {
-    console.log(`NodeCast TV server running on http://localhost:${PORT}`);
+    startupLog(`Server running on http://localhost:${PORT}`);
+    startupLog(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
     // Load plugins
     await loadPlugins().catch(err => {
-        console.error('Plugin initialization failed:', err);
+        console.error('[Plugin] Initialization failed:', err);
     });
 
     // Trigger background sync with delay to allow server to settle
@@ -212,12 +247,25 @@ app.listen(PORT, async () => {
         // Start the server-side sync timer after initial sync
         await syncService.startSyncTimer().catch(console.error);
 
+        // Start Firebase media cache sync timer (24h) and do initial push after first sync
+        firebaseCacheSync.startTimer();
+        await firebaseCacheSync.syncNow('startup').catch(err => {
+            console.warn('[FirebaseCache] Initial startup sync skipped:', err.message);
+        });
+
         // Detect hardware acceleration capabilities
         try {
             const hwDetect = require('./services/hwDetect');
-            await hwDetect.detect();
+            const capabilities = await hwDetect.detect();
+            const profileResult = await dbStore.settings.applyAutoProfileIfNeeded(capabilities);
+            if (profileResult.applied) {
+                startupLog(`Applied system auto-profile: ${profileResult.settings.autoProfileSummary}`);
+            }
         } catch (err) {
             console.warn('Hardware detection failed:', err.message);
         }
     }, 5000);
+
+    startupLog(`Startup completed in ${Date.now() - startupAt}ms`);
+    startupDivider();
 });

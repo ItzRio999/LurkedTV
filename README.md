@@ -133,6 +133,20 @@ OIDC_CALLBACK_URL=http://localhost:3000/api/auth/oidc/callback # Adjust for your
 
 **Note:** New users signing in via SSO are automatically assigned the **Viewer** role. You must manually promote them to Admin if desired.
 
+### Firebase Media Cache Sync (Firestore)
+
+LurkedTv can push a media snapshot (Live, Movies, Series only) to Firestore every 24 hours and on manual request from Settings.
+
+Set these environment variables:
+
+```env
+FIREBASE_PROJECT_ID=lurkedtv-b8047
+FIREBASE_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+```
+
+If `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` are missing, Firebase cache sync remains disabled.
+
 ### Usage
 
 1.  Go to **Settings** -> **Content Sources**.

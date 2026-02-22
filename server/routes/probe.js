@@ -111,6 +111,15 @@ function analyzeProbeResult(probeResult, url) {
             codec: s.codec_name
         }));
 
+    const formatDuration = Number(format.duration || 0);
+    const streamDurations = streams
+        .map(s => Number(s.duration || 0))
+        .filter(d => Number.isFinite(d) && d > 0);
+    const bestDuration = Number.isFinite(formatDuration) && formatDuration > 0
+        ? formatDuration
+        : (streamDurations.length ? Math.max(...streamDurations) : 0);
+    const duration = bestDuration > 0 ? Math.round(bestDuration) : 0;
+
     // Determine what processing is needed
     // 4. MKV files often cause OOM/decoding issues in browser fMP4 remux, 
     // so we force them to "needsTranscode" which uses HLS (more robust).
@@ -131,6 +140,7 @@ function analyzeProbeResult(probeResult, url) {
         width: videoStream?.width || 0,
         height: videoStream?.height || 0,
         audioChannels: audioStream?.channels || 0, // For Smart Audio Copy
+        duration,
         container: container,
         compatible: compatible,
         needsRemux: needsRemux,

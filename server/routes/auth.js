@@ -65,62 +65,70 @@ router.get('/setup-required', async (req, res) => {
  * POST /api/auth/setup
  */
 router.post('/setup', async (req, res) => {
-    try {
-        const userCount = await db.users.count();
-
-        // Check if setup already done
-        if (userCount > 0) {
-            return res.status(400).json({ error: 'Setup already completed' });
-        }
-
-        const { username, password } = req.body;
-
-        if (!username || !password) {
-            return res.status(400).json({ error: 'Username and password required' });
-        }
-
-        if (password.length < 6) {
-            return res.status(400).json({ error: 'Password must be at least 6 characters' });
-        }
-
-        // Create admin user
-        const passwordHash = await auth.hashPassword(password);
-        const adminUser = await db.users.create({
-            username,
-            passwordHash,
-            role: 'admin'
-        });
-
-        // Generate token for immediate login
-        const token = auth.generateToken(adminUser);
-
-        res.status(201).json({
-            message: 'Admin user created successfully',
-            token,
-            user: adminUser
-        });
-    } catch (err) {
-        console.error('Error in /setup:', err);
-        res.status(500).json({ error: err.message || 'Server error' });
-    }
+    return res.status(410).json({
+        error: 'Local admin setup is disabled. Use Firebase authentication.'
+    });
 });
 
 /**
  * Login with Passport Local Strategy
  * POST /api/auth/login
  */
-router.post('/login', (req, res, next) => {
-    auth.passport.authenticate('local', { session: false }, (err, user, info) => {
-        if (err) {
-            console.error('Login error:', err);
-            return res.status(500).json({ error: 'Server error' });
+router.post('/login', (req, res) => {
+    return res.status(410).json({
+        error: 'Username/password login is disabled. Use Firebase authentication.'
+    });
+});
+
+/**
+ * Login with Firebase ID token
+ * POST /api/auth/firebase
+ */
+router.post('/firebase', async (req, res) => {
+    try {
+        const { idToken } = req.body;
+
+        if (!idToken) {
+            return res.status(400).json({ error: 'idToken is required' });
+        }
+
+        const firebaseIdentity = await auth.verifyFirebaseIdToken(idToken);
+
+        if (!firebaseIdentity.email) {
+            return res.status(400).json({ error: 'Firebase account must have an email address' });
+        }
+
+        if (!firebaseIdentity.emailVerified) {
+            return res.status(403).json({ error: 'Email not verified. Please verify your email before continuing.' });
+        }
+
+        let user = await db.users.getByFirebaseUid(firebaseIdentity.uid);
+
+        if (!user) {
+            user = await db.users.getByEmail(firebaseIdentity.email);
         }
 
         if (!user) {
-            return res.status(401).json({ error: info?.message || 'Invalid credentials' });
+            const userCount = await db.users.count();
+            const role = userCount === 0 ? 'admin' : 'viewer';
+            const baseUsername = firebaseIdentity.email.split('@')[0] || 'user';
+            let username = baseUsername;
+            let suffix = 1;
+
+            while (await db.users.getByUsername(username)) {
+                username = `${baseUsername}${suffix++}`;
+            }
+
+            user = await db.users.create({
+                username,
+                role,
+                email: firebaseIdentity.email,
+                firebaseUid: firebaseIdentity.uid
+            });
+        } else if (!user.firebaseUid) {
+            user = await db.users.update(user.id, { firebaseUid: firebaseIdentity.uid });
         }
 
-        // Generate JWT token
         const token = auth.generateToken(user);
 
         res.json({
@@ -128,10 +136,16 @@ router.post('/login', (req, res, next) => {
             user: {
                 id: user.id,
                 username: user.username,
-                role: user.role
+                role: user.role,
+                email: user.email,
+                defaultLanguage: user.defaultLanguage || '',
+                emailVerified: true
             }
         });
-    })(req, res, next);
+    } catch (err) {
+        console.error('Firebase login error:', err);
+        res.status(401).json({ error: err.message || 'Firebase authentication failed' });
+    }
 });
 
 /**
@@ -159,11 +173,100 @@ router.get('/me', auth.requireAuth, async (req, res) => {
         res.json({
             id: user.id,
             username: user.username,
-            role: user.role
+            role: user.role,
+            email: user.email || null,
+            defaultLanguage: user.defaultLanguage || '',
+            emailVerified: !!user.firebaseUid
         });
     } catch (err) {
         console.error('Error in /me:', err);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/**
+ * Update current user preferences
+ * PATCH /api/auth/me/preferences
+ */
+router.patch('/me/preferences', auth.requireAuth, async (req, res) => {
+    try {
+        const { defaultLanguage } = req.body;
+
+        const updates = {};
+        if (defaultLanguage !== undefined) {
+            updates.defaultLanguage = String(defaultLanguage || '').trim().toLowerCase().slice(0, 12);
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'No valid preference updates provided' });
+        }
+
+        const user = await db.users.update(req.user.id, updates);
+
+        res.json({
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            email: user.email || null,
+            defaultLanguage: user.defaultLanguage || '',
+            emailVerified: !!user.firebaseUid
+        });
+    } catch (err) {
+        console.error('Error updating preferences:', err);
+        res.status(500).json({ error: err.message || 'Server error' });
+    }
+});
+
+/**
+ * Change current user password
+ * POST /api/auth/me/change-password
+ */
+router.post('/me/change-password', auth.requireAuth, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current password and new password are required' });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        }
+
+        const user = await db.users.getById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Firebase users: verify current password, then update via Firebase.
+        if (user.firebaseUid && user.email) {
+            const session = await auth.verifyFirebasePassword(user.email, currentPassword);
+
+            if (session.localId !== user.firebaseUid) {
+                return res.status(403).json({ error: 'Account mismatch while updating password' });
+            }
+
+            await auth.updateFirebasePassword(session.idToken, newPassword);
+            return res.json({ success: true, message: 'Password updated successfully' });
+        }
+
+        // Local users fallback.
+        if (!user.passwordHash) {
+            return res.status(400).json({ error: 'This account does not support local password changes' });
+        }
+
+        const isValid = await auth.verifyPassword(currentPassword, user.passwordHash);
+        if (!isValid) {
+            return res.status(401).json({ error: 'Current password is incorrect' });
+        }
+
+        const passwordHash = await auth.hashPassword(newPassword);
+        await db.users.update(user.id, { passwordHash });
+
+        return res.json({ success: true, message: 'Password updated successfully' });
+    } catch (err) {
+        console.error('Error changing password:', err);
+        res.status(500).json({ error: err.message || 'Failed to change password' });
     }
 });
 

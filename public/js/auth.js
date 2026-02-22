@@ -142,3 +142,4 @@ const Auth = {
         return this.currentUser;
     }
 };
+

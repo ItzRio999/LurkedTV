@@ -4,25 +4,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - NodeCast TV</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <title>Login - LurkedTv</title>
+    <link rel="icon" type="image/png" href="/img/LurkedTV.png?v=2">
+    <link rel="shortcut icon" type="image/png" href="/img/LurkedTV.png?v=2">
     <link rel="stylesheet" href="css/main.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        html,
         body {
             margin: 0;
             padding: 0;
             background: var(--color-bg-primary);
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        body {
+            min-height: 100vh;
         }
 
         .login-container {
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             min-height: 100vh;
-            padding: 20px;
+            padding: 24px 20px;
         }
 
         .login-box {
@@ -41,18 +49,50 @@
         }
 
         .login-logo .logo-icon {
-            width: 64px;
-            height: 64px;
+            width: min(220px, 80%);
+            height: auto;
             margin: 0 auto var(--space-md);
-            color: var(--color-accent);
+            display: block;
+            object-fit: contain;
         }
 
         .login-logo h1 {
+            position: relative;
+            display: inline-block;
             font-family: 'Century Gothic', sans-serif;
-            font-size: 28px;
-            font-weight: 500;
-            color: var(--color-text-primary);
-            margin: 0;
+            font-size: clamp(30px, 4vw, 38px);
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            color: transparent;
+            background: linear-gradient(110deg, #ffffff 0%, #ffe0ff 18%, #b114ff 40%, #8bd6ff 62%, #ffffff 85%);
+            background-size: 260% auto;
+            -webkit-background-clip: text;
+            background-clip: text;
+            margin: 0 0 2px 0;
+            filter: drop-shadow(0 0 10px rgba(177, 20, 255, 0.35));
+            animation: logo-shimmer 5.5s linear infinite, logo-breathe 3.2s ease-in-out infinite;
+        }
+
+        .login-logo h1::before,
+        .login-logo h1::after {
+            content: attr(data-text);
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0.55;
+            mix-blend-mode: screen;
+        }
+
+        .login-logo h1::before {
+            color: rgba(80, 205, 255, 0.75);
+            transform: translate(1px, 0);
+            animation: logo-rgb-left 2.7s ease-in-out infinite;
+        }
+
+        .login-logo h1::after {
+            color: rgba(255, 110, 240, 0.75);
+            transform: translate(-1px, 0);
+            animation: logo-rgb-right 2.7s ease-in-out infinite;
         }
 
         .login-logo .brand-accent {
@@ -100,6 +140,32 @@
             color: var(--color-text-muted);
         }
 
+        .password-field {
+            position: relative;
+        }
+
+        .password-field input {
+            padding-right: 44px;
+        }
+
+        .toggle-password-btn {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            border: none;
+            background: transparent;
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 4px;
+        }
+
+        .toggle-password-btn:hover {
+            color: var(--color-text-primary);
+        }
+
         .btn-login {
             width: 100%;
             padding: 14px;
@@ -117,7 +183,7 @@
         .btn-login:hover {
             background: var(--color-accent-hover);
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+            box-shadow: 0 4px 12px rgba(177, 20, 255, 0.24);
         }
 
         .btn-login:active {
@@ -145,19 +211,139 @@
             display: block;
         }
 
-        .setup-message {
-            background: rgba(99, 102, 241, 0.1);
-            color: var(--color-accent);
-            padding: 12px 16px;
-            border-radius: var(--radius-md);
+        .auth-mode-switch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
             margin-bottom: var(--space-lg);
-            border: 1px solid var(--color-accent-dim);
+        }
+
+        .auth-mode-btn {
+            padding: 10px 12px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            background: var(--color-bg-tertiary);
+            color: var(--color-text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .auth-mode-btn.active {
+            border-color: var(--color-accent);
+            background: rgba(177, 20, 255, 0.16);
+            color: var(--color-text-primary);
+        }
+
+        .quick-setup {
+            margin-top: var(--space-lg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            background: var(--color-bg-tertiary);
+            padding: 14px;
+        }
+
+        .quick-setup-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--color-text-primary);
             font-size: 14px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .quick-setup-hint {
+            margin: 6px 0 0 24px;
+            color: var(--color-text-secondary);
+            font-size: 12px;
+        }
+
+        .quick-setup-fields {
+            margin-top: var(--space-md);
             display: none;
         }
 
-        .setup-message.show {
+        .quick-setup-fields.show {
             display: block;
+        }
+
+        .quick-setup-fields select,
+        .quick-setup-fields input {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--color-bg-secondary);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            color: var(--color-text-primary);
+            font-size: 15px;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+
+        .quick-setup-fields select:focus,
+        .quick-setup-fields input:focus {
+            outline: none;
+            border-color: var(--color-accent);
+            background: var(--color-bg-hover);
+        }
+
+        @keyframes logo-shimmer {
+            0% {
+                background-position: 0% 50%;
+            }
+
+            100% {
+                background-position: 260% 50%;
+            }
+        }
+
+        @keyframes logo-breathe {
+            0%,
+            100% {
+                transform: translateY(0) scale(1);
+                text-shadow: 0 0 0 rgba(255, 255, 255, 0.2);
+            }
+
+            50% {
+                transform: translateY(-1px) scale(1.015);
+                text-shadow: 0 0 12px rgba(255, 255, 255, 0.35);
+            }
+        }
+
+        @keyframes logo-rgb-left {
+            0%,
+            100% {
+                transform: translate(0.8px, 0);
+                opacity: 0.3;
+            }
+
+            50% {
+                transform: translate(1.8px, -0.5px);
+                opacity: 0.5;
+            }
+        }
+
+        @keyframes logo-rgb-right {
+            0%,
+            100% {
+                transform: translate(-0.8px, 0);
+                opacity: 0.3;
+            }
+
+            50% {
+                transform: translate(-1.8px, 0.5px);
+                opacity: 0.5;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .login-logo h1,
+            .login-logo h1::before,
+            .login-logo h1::after {
+                animation: none !important;
+            }
         }
     </style>
 </head>
@@ -166,154 +352,391 @@
     <div class="login-container">
         <div class="login-box">
             <div class="login-logo">
-                <svg class="logo-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 187.63 210.6"
-                    fill="currentColor">
-                    <path
-                        d="M169.71,87.87c-4.77,0-9.1,1.88-12.31,4.92L35.3,22.3c.35-1.4.56-2.86.56-4.37C35.86,8.03,27.83,0,17.93,0S0,8.03,0,17.93c0,8.44,5.84,15.5,13.69,17.4v140c-7.71,2.01-13.41,8.99-13.41,17.33,0,9.9,8.03,17.93,17.93,17.93s17.93-8.03,17.93-17.93c0-1.56-.22-3.07-.6-4.51l121.21-69.98c3.26,3.42,7.86,5.55,12.95,5.55,9.9,0,17.93-8.03,17.93-17.93s-8.03-17.93-17.93-17.93ZM152.78,99.92c-.14.41-.27.83-.38,1.25h-51.47l-44.18-24.72L30.4,30.8c.33-.32.64-.65.94-.99l121.45,70.12ZM22.17,175.2V35.33c.23-.05.45-.11.67-.17l26.35,45.65-.34,50.04-25.74,44.59c-.31-.09-.63-.17-.95-.24ZM31.52,180.69c-.27-.3-.55-.6-.84-.89l25.48-44.13,44.64-25.78h51.47c.07.32.15.63.24.94L31.52,180.69Z" />
-                </svg>
-                <h1>nodecast-tv</h1>
-                <p id="login-subtitle">Sign in to continue</p>
+                <img class="logo-icon" src="/img/LurkedTV.png" alt="LurkedTv logo">
+                <h1 data-text="LurkedTv">LurkedTv</h1>
+                <p id="login-subtitle">Sign in with Firebase to continue</p>
             </div>
 
             <div class="error-message" id="error-message"></div>
-            <div class="setup-message" id="setup-message">
-                Welcome! Please create your admin account to get started.
+            <div class="auth-mode-switch">
+                <button type="button" class="auth-mode-btn active" id="mode-signin">Sign In</button>
+                <button type="button" class="auth-mode-btn" id="mode-signup">Sign Up</button>
             </div>
 
             <form id="login-form">
                 <div class="form-group">
-                    <label for="username">Username</label>
-                    <input type="text" id="username" name="username" required autocomplete="username"
-                        placeholder="Enter your username">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required autocomplete="email"
+                        placeholder="Enter your email">
                 </div>
 
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password" required autocomplete="current-password"
-                        minlength="6" placeholder="Enter your password">
+                    <div class="password-field">
+                        <input type="password" id="password" name="password" required autocomplete="current-password"
+                            minlength="6" placeholder="Enter your password">
+                        <button type="button" class="toggle-password-btn" data-target="password"
+                            aria-label="Show password">Show</button>
+                    </div>
+                </div>
+
+                <div class="form-group" id="confirm-password-group" style="display: none;">
+                    <label for="confirm-password">Confirm Password</label>
+                    <div class="password-field">
+                        <input type="password" id="confirm-password" name="confirm-password" minlength="6"
+                            placeholder="Confirm your password">
+                        <button type="button" class="toggle-password-btn" data-target="confirm-password"
+                            aria-label="Show confirm password">Show</button>
+                    </div>
                 </div>
 
                 <button type="submit" class="btn-login" id="submit-btn">Sign In</button>
             </form>
 
-            <div class="sso-divider" style="text-align: center; margin: 20px 0; position: relative;">
-                <span
-                    style="background: var(--color-bg-secondary); padding: 0 10px; color: var(--color-text-secondary); font-size: 14px; position: relative; z-index: 1;">OR</span>
-                <div
-                    style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: var(--color-border); z-index: 0;">
+            <div class="quick-setup">
+                <label class="quick-setup-toggle" for="quick-setup-enabled">
+                    <input type="checkbox" id="quick-setup-enabled">
+                    <span>Add playlist now (optional)</span>
+                </label>
+                <p class="quick-setup-hint">Creates your first source right after sign-in.</p>
+
+                <div class="quick-setup-fields" id="quick-setup-fields">
+                    <div class="form-group">
+                        <label for="quick-source-type">Playlist Type</label>
+                        <select id="quick-source-type">
+                            <option value="m3u">M3U Playlist</option>
+                            <option value="xtream">Xtream Account</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="quick-source-name">Source Name</label>
+                        <input type="text" id="quick-source-name" placeholder="My Playlist">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="quick-source-url" id="quick-source-url-label">M3U URL</label>
+                        <input type="text" id="quick-source-url" placeholder="https://example.com/playlist.m3u">
+                    </div>
+
+                    <div class="form-group" id="quick-xtream-username-group" style="display: none;">
+                        <label for="quick-source-username">Xtream Username</label>
+                        <input type="text" id="quick-source-username" placeholder="Enter Xtream username">
+                    </div>
+
+                    <div class="form-group" id="quick-xtream-password-group" style="display: none;">
+                        <label for="quick-source-password">Xtream Password</label>
+                        <input type="password" id="quick-source-password" placeholder="Enter Xtream password">
+                    </div>
                 </div>
             </div>
-
-            <button id="btn-sso-login" class="btn-login"
-                style="background: transparent; border: 1px solid var(--color-border); color: var(--color-text-primary); display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.2s;">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
-                    style="width: 20px; height: 20px;">
-                    <path
-                        d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z" />
-                </svg>
-                Sign in with SSO
-            </button>
-
-            <style>
-                #btn-sso-login:hover {
-                    background: var(--color-bg-tertiary) !important;
-                    border-color: var(--color-accent) !important;
-                    color: var(--color-accent) !important;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-                }
-            </style>
         </div>
     </div>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
+        import { getAnalytics, isSupported as analyticsSupported } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-analytics.js";
 
-    <script>
-        // Start SSO Login
-        document.getElementById('btn-sso-login').addEventListener('click', () => {
-            window.location.href = '/api/auth/oidc/login';
-        });
+        const firebaseConfig = {
+            apiKey: "AIzaSyCnw2SySq8zl2PHjneE7_zEuosYueOo5Pk",
+            authDomain: "lurkedtv-b8047.firebaseapp.com",
+            projectId: "lurkedtv-b8047",
+            storageBucket: "lurkedtv-b8047.firebasestorage.app",
+            messagingSenderId: "929847356493",
+            appId: "1:929847356493:web:6c999e524c494523afc004",
+            measurementId: "G-ZWZTSJB2EM"
+        };
 
-        // Check for URL Error params
-        const urlParams = new URLSearchParams(window.location.search);
-        const error = urlParams.get('error');
-        if (error) {
-            const errorMessage = document.getElementById('error-message');
-            errorMessage.textContent = error;
-            errorMessage.classList.add('show');
-            // Clean URL
-            window.history.replaceState({}, document.title, window.location.pathname);
+        const app = initializeApp(firebaseConfig);
+        const firebaseAuth = getAuth(app);
+
+        analyticsSupported().then((ok) => {
+            if (ok) {
+                getAnalytics(app);
+            }
+        }).catch(() => { });
+
+        const quickSetupEnabled = document.getElementById('quick-setup-enabled');
+        const quickSetupFields = document.getElementById('quick-setup-fields');
+        const quickSourceType = document.getElementById('quick-source-type');
+        const quickSourceName = document.getElementById('quick-source-name');
+        const quickSourceUrl = document.getElementById('quick-source-url');
+        const quickSourceUrlLabel = document.getElementById('quick-source-url-label');
+        const quickXtreamUsernameGroup = document.getElementById('quick-xtream-username-group');
+        const quickXtreamPasswordGroup = document.getElementById('quick-xtream-password-group');
+        const quickSourceUsername = document.getElementById('quick-source-username');
+        const quickSourcePassword = document.getElementById('quick-source-password');
+        const submitBtn = document.getElementById('submit-btn');
+        const errorMessage = document.getElementById('error-message');
+        const loginSubtitle = document.getElementById('login-subtitle');
+        const signInModeBtn = document.getElementById('mode-signin');
+        const signUpModeBtn = document.getElementById('mode-signup');
+        const confirmPasswordGroup = document.getElementById('confirm-password-group');
+        const confirmPasswordInput = document.getElementById('confirm-password');
+        const passwordVisibilityButtons = document.querySelectorAll('.toggle-password-btn');
+        let authMode = 'signin';
+
+        function isQuickSetupComplete() {
+            if (!quickSetupEnabled.checked) return true;
+
+            const type = quickSourceType.value;
+            const hasName = quickSourceName.value.trim().length > 0;
+            const hasUrl = quickSourceUrl.value.trim().length > 0;
+
+            if (!hasName || !hasUrl) return false;
+            if (type !== 'xtream') return true;
+
+            return quickSourceUsername.value.trim().length > 0 &&
+                quickSourcePassword.value.trim().length > 0;
         }
 
-        // Check if setup is required
-        let isSetupMode = false;
+        function updateSubmitButtonState() {
+            submitBtn.disabled = !isQuickSetupComplete();
+        }
 
-        async function checkSetupRequired() {
-            try {
-                const response = await fetch('/api/auth/setup-required');
-                const data = await response.json();
+        function updateQuickSetupUI() {
+            quickSetupFields.classList.toggle('show', quickSetupEnabled.checked);
+            const isXtream = quickSourceType.value === 'xtream';
+            quickXtreamUsernameGroup.style.display = isXtream ? 'block' : 'none';
+            quickXtreamPasswordGroup.style.display = isXtream ? 'block' : 'none';
+            quickSourceUrlLabel.textContent = isXtream ? 'Xtream Server URL' : 'M3U URL';
+            quickSourceUrl.placeholder = isXtream ? 'http://server.com:port' : 'https://example.com/playlist.m3u';
+            updateSubmitButtonState();
+        }
 
-                if (data.setupRequired) {
-                    isSetupMode = true;
-                    document.getElementById('login-subtitle').textContent = 'Create Admin Account';
-                    document.getElementById('submit-btn').textContent = 'Create Account';
-                    document.getElementById('setup-message').classList.add('show');
-                    document.getElementById('password').placeholder = 'Minimum 6 characters';
-                    // Hide SSO in setup mode
-                    document.querySelector('.sso-divider').style.display = 'none';
-                    document.getElementById('btn-sso-login').style.display = 'none';
+        function getQuickSetupSourceData() {
+            if (!quickSetupEnabled.checked) {
+                return null;
+            }
+
+            const type = quickSourceType.value;
+            const name = quickSourceName.value.trim();
+            const url = quickSourceUrl.value.trim();
+            const username = quickSourceUsername.value.trim();
+            const password = quickSourcePassword.value.trim();
+
+            if (!name || !url) {
+                throw new Error('Playlist name and URL are required when quick setup is enabled.');
+            }
+
+            const sourceData = { type, name, url };
+            if (type === 'xtream') {
+                if (!username || !password) {
+                    throw new Error('Xtream username and password are required.');
                 }
-            } catch (err) {
-                console.error('Error checking setup status:', err);
+                sourceData.username = username;
+                sourceData.password = password;
+            }
+
+            return sourceData;
+        }
+
+        async function createQuickSource(sourceData, token) {
+            if (!sourceData) return;
+
+            const response = await fetch('/api/sources', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(sourceData)
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || 'Failed to create playlist source');
             }
         }
 
-        // Handle form submission
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        function formatFirebaseError(code, fallback) {
+            switch (code) {
+                case 'auth/invalid-credential':
+                case 'auth/invalid-login-credentials':
+                case 'auth/wrong-password':
+                case 'auth/user-not-found':
+                    return 'Invalid email or password.';
+                case 'auth/email-already-in-use':
+                    return 'Email is already in use.';
+                case 'auth/weak-password':
+                    return 'Password is too weak. Use at least 6 characters.';
+                case 'auth/invalid-email':
+                    return 'Please enter a valid email address.';
+                case 'auth/too-many-requests':
+                    return 'Too many attempts. Please try again later.';
+                default:
+                    return fallback || 'Authentication failed';
+            }
+        }
 
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const submitBtn = document.getElementById('submit-btn');
-            const errorMessage = document.getElementById('error-message');
-
-            // Clear previous errors
+        function setAuthMode(mode) {
+            authMode = mode;
+            const isSignUp = mode === 'signup';
+            signInModeBtn.classList.toggle('active', !isSignUp);
+            signUpModeBtn.classList.toggle('active', isSignUp);
+            confirmPasswordGroup.style.display = isSignUp ? 'block' : 'none';
+            confirmPasswordInput.required = isSignUp;
+            loginSubtitle.textContent = isSignUp
+                ? 'Create your Firebase account'
+                : 'Sign in with Firebase to continue';
+            submitBtn.textContent = isSignUp ? 'Sign Up' : 'Sign In';
             errorMessage.classList.remove('show');
             errorMessage.textContent = '';
 
-            // Disable button
+            const passwordInput = document.getElementById('password');
+            const isShowing = passwordInput?.type === 'text';
+            setPasswordVisibility(Boolean(isShowing));
+        }
+
+        async function exchangeFirebaseToken(idToken) {
+            const response = await fetch('/api/auth/firebase', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ idToken })
+            });
+
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Server authentication failed');
+            }
+
+            return data.token;
+        }
+
+        async function finalizeSignIn(idToken, sourceData) {
+            const appToken = await exchangeFirebaseToken(idToken);
+            localStorage.setItem('authToken', appToken);
+
+            if (sourceData) {
+                try {
+                    await createQuickSource(sourceData, appToken);
+                } catch (sourceErr) {
+                    console.warn('Quick playlist setup failed:', sourceErr.message);
+                }
+            }
+
+            window.location.replace('/');
+        }
+
+        function routeToVerificationGate(email, sourceData) {
+            if (sourceData) {
+                sessionStorage.setItem('pendingQuickPlaylistSource', JSON.stringify(sourceData));
+            } else {
+                sessionStorage.removeItem('pendingQuickPlaylistSource');
+            }
+
+            if (email) {
+                sessionStorage.setItem('pendingVerificationEmail', email);
+            } else {
+                sessionStorage.removeItem('pendingVerificationEmail');
+            }
+
+            window.location.replace('/verify-email.html');
+        }
+
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            errorMessage.classList.remove('show');
+            errorMessage.textContent = '';
+
+            let quickSourceData = null;
+            try {
+                quickSourceData = getQuickSetupSourceData();
+            } catch (err) {
+                errorMessage.textContent = err.message;
+                errorMessage.classList.add('show');
+                return;
+            }
+
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value;
+            const confirmPassword = confirmPasswordInput.value;
+
+            if (authMode === 'signup' && password !== confirmPassword) {
+                errorMessage.textContent = 'Passwords do not match.';
+                errorMessage.classList.add('show');
+                return;
+            }
+
             submitBtn.disabled = true;
             submitBtn.textContent = 'Please wait...';
 
             try {
-                const endpoint = isSetupMode ? '/api/auth/setup' : '/api/auth/login';
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ username, password })
-                });
+                const credential = authMode === 'signup'
+                    ? await createUserWithEmailAndPassword(firebaseAuth, email, password)
+                    : await signInWithEmailAndPassword(firebaseAuth, email, password);
 
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Authentication failed');
+                if (authMode === 'signup') {
+                    await sendEmailVerification(credential.user);
                 }
 
-                // Store token
-                localStorage.setItem('authToken', data.token);
+                await credential.user.reload();
 
-                // Redirect to main app (replace history to prevent back button issues)
-                window.location.replace('/');
+                if (!credential.user.emailVerified) {
+                    routeToVerificationGate(credential.user.email || email, quickSourceData);
+                    return;
+                }
 
+                const idToken = await credential.user.getIdToken(true);
+                await finalizeSignIn(idToken, quickSourceData);
             } catch (err) {
-                errorMessage.textContent = err.message;
+                errorMessage.textContent = formatFirebaseError(err.code, err.message);
                 errorMessage.classList.add('show');
-                submitBtn.disabled = false;
-                submitBtn.textContent = isSetupMode ? 'Create Account' : 'Sign In';
+                submitBtn.textContent = authMode === 'signup' ? 'Sign Up' : 'Sign In';
+                updateSubmitButtonState();
             }
         });
 
-        // Check setup status on load
-        checkSetupRequired();
+        signInModeBtn.addEventListener('click', () => setAuthMode('signin'));
+        signUpModeBtn.addEventListener('click', () => setAuthMode('signup'));
+        function setPasswordVisibility(show) {
+            const passwordInput = document.getElementById('password');
+            const confirmInput = document.getElementById('confirm-password');
+            const isSignUp = authMode === 'signup';
+
+            if (passwordInput) {
+                passwordInput.type = show ? 'text' : 'password';
+            }
+            if (isSignUp && confirmInput) {
+                confirmInput.type = show ? 'text' : 'password';
+            } else if (confirmInput && !isSignUp) {
+                confirmInput.type = 'password';
+            }
+
+            passwordVisibilityButtons.forEach((btn) => {
+                const targetId = btn.dataset.target;
+                if (!isSignUp && targetId === 'confirm-password') {
+                    btn.textContent = 'Show';
+                    btn.setAttribute('aria-label', 'Show confirm password');
+                    return;
+                }
+
+                btn.textContent = show ? 'Hide' : 'Show';
+                const label = targetId === 'confirm-password' ? 'confirm password' : 'password';
+                btn.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} ${label}`);
+            });
+        }
+
+        passwordVisibilityButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const passwordInput = document.getElementById('password');
+                const nextShowState = passwordInput?.type === 'password';
+                setPasswordVisibility(nextShowState);
+            });
+        });
+        quickSetupEnabled.addEventListener('change', updateQuickSetupUI);
+        quickSourceType.addEventListener('change', updateQuickSetupUI);
+        quickSourceName.addEventListener('input', updateSubmitButtonState);
+        quickSourceUrl.addEventListener('input', updateSubmitButtonState);
+        quickSourceUsername.addEventListener('input', updateSubmitButtonState);
+        quickSourcePassword.addEventListener('input', updateSubmitButtonState);
+        updateQuickSetupUI();
+        setAuthMode('signin');
+        setPasswordVisibility(false);
     </script>
 </body>
 

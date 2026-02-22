@@ -1,5 +1,5 @@
 /**
- * API Client - Frontend API wrapper for NodeCast TV
+ * API Client - Frontend API wrapper for LurkedTv
  */
 
 const API = {
@@ -122,6 +122,8 @@ const API = {
                 const query = params.length ? `?${params.join('&')}` : '';
                 return API.request('GET', `/proxy/xtream/${sourceId}/vod_streams${query}`);
             },
+            vodInfo: (sourceId, vodId) =>
+                API.request('GET', `/proxy/xtream/${sourceId}/vod_info?vod_id=${vodId}`),
             seriesCategories: (sourceId, options = {}) => {
                 const params = options.includeHidden ? '?includeHidden=true' : '';
                 return API.request('GET', `/proxy/xtream/${sourceId}/series_categories${params}`);
@@ -157,7 +159,10 @@ const API = {
         get: () => API.request('GET', '/settings'),
         update: (data) => API.request('PUT', '/settings', data),
         reset: () => API.request('DELETE', '/settings'),
-        getDefaults: () => API.request('GET', '/settings/defaults')
+        getDefaults: () => API.request('GET', '/settings/defaults'),
+        getSyncStatus: () => API.request('GET', '/settings/sync-status'),
+        syncFirebaseCache: () => API.request('POST', '/settings/firebase-cache/sync'),
+        applyAutoProfile: (data = {}) => API.request('POST', '/settings/auto-profile/apply', data)
     },
 
     // Users (admin only)
@@ -166,8 +171,17 @@ const API = {
         create: (data) => API.request('POST', '/auth/users', data),
         update: (id, data) => API.request('PUT', `/auth/users/${id}`, data),
         delete: (id) => API.request('DELETE', `/auth/users/${id}`)
+    },
+
+    // Current account
+    account: {
+        getMe: () => API.request('GET', '/auth/me'),
+        updatePreferences: (data) => API.request('PATCH', '/auth/me/preferences', data),
+        changePassword: (data) => API.request('POST', '/auth/me/change-password', data)
     }
 };
 
 // Make API available globally
 window.API = API;
+
+

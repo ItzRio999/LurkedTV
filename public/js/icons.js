@@ -30,3 +30,4 @@ const Icons = {
 };
 
 window.Icons = Icons;
+

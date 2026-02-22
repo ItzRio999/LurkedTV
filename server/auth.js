@@ -13,6 +13,25 @@ const { Strategy: LocalStrategy } = require('passport-local');
 // JWT Secret - In production, use environment variable
 const JWT_SECRET = process.env.JWT_SECRET || 'nodecast-tv-secret-key-change-in-production';
 const JWT_EXPIRY = '24h';
+const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyCnw2SySq8zl2PHjneE7_zEuosYueOo5Pk';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'lurkedtv-b8047';
+
+async function firebaseRequest(path, payload) {
+    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/${path}?key=${FIREBASE_API_KEY}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(data?.error?.message || 'Firebase request failed');
+    }
+
+    return data;
+}
 
 /**
  * Hash password using bcrypt
@@ -53,6 +72,57 @@ function verifyToken(token) {
     } catch (err) {
         return null;
     }
+}
+
+/**
+ * Verify Firebase ID token using Identity Toolkit API
+ */
+async function verifyFirebaseIdToken(idToken) {
+    if (!idToken) {
+        throw new Error('Missing Firebase ID token');
+    }
+
+    const data = await firebaseRequest('accounts:lookup', { idToken });
+
+    if (!Array.isArray(data.users) || data.users.length === 0) {
+        throw new Error('Failed to verify Firebase token');
+    }
+
+    const firebaseUser = data.users[0];
+    const expectedIssuer = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
+
+    if (firebaseUser.issuer && firebaseUser.issuer !== expectedIssuer) {
+        throw new Error('Firebase token issuer mismatch');
+    }
+
+    return {
+        uid: firebaseUser.localId,
+        email: firebaseUser.email || null,
+        emailVerified: Boolean(firebaseUser.emailVerified),
+        displayName: firebaseUser.displayName || null
+    };
+}
+
+async function verifyFirebasePassword(email, password) {
+    const data = await firebaseRequest('accounts:signInWithPassword', {
+        email,
+        password,
+        returnSecureToken: true
+    });
+
+    return {
+        idToken: data.idToken,
+        localId: data.localId,
+        email: data.email
+    };
+}
+
+async function updateFirebasePassword(idToken, newPassword) {
+    await firebaseRequest('accounts:update', {
+        idToken,
+        password: newPassword,
+        returnSecureToken: false
+    });
 }
 
 /**
@@ -258,6 +328,9 @@ module.exports = {
     verifyPassword,
     generateToken,
     verifyToken,
+    verifyFirebaseIdToken,
+    verifyFirebasePassword,
+    updateFirebasePassword,
     configureLocalStrategy,
     configureJwtStrategy,
     configureSessionSerialization,

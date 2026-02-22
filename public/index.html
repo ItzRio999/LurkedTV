@@ -7,9 +7,10 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>nodecast-tv | IPTV Player</title>
+  <title>LurkedTv | IPTV Player</title>
   <meta name="description" content="Stream live TV, movies, and series with EPG support">
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" href="/img/LurkedTV.png?v=2">
+  <link rel="shortcut icon" type="image/png" href="/img/LurkedTV.png?v=2">
   <link rel="stylesheet" href="css/main.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,16 +21,23 @@
 </head>
 
 <body>
+  <!-- Signal Aurora Background -->
+  <canvas id="bg-ripple" aria-hidden="true"></canvas>
+  <div class="bg-cursor-glow" aria-hidden="true"></div>
+  <div id="bg-aurora" aria-hidden="true">
+    <div class="aurora-blob aurora-blob--1"></div>
+    <div class="aurora-blob aurora-blob--2"></div>
+    <div class="aurora-blob aurora-blob--3"></div>
+  </div>
+
   <div id="app">
     <!-- Navigation -->
     <nav class="navbar">
       <div class="navbar-brand">
-        <span class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 187.63 210.6" fill="#6366f1"
-            class="icon">
-            <path
-              d="M169.71,87.87c-4.77,0-9.1,1.88-12.31,4.92L35.3,22.3c.35-1.4.56-2.86.56-4.37C35.86,8.03,27.83,0,17.93,0S0,8.03,0,17.93c0,8.44,5.84,15.5,13.69,17.4v140c-7.71,2.01-13.41,8.99-13.41,17.33,0,9.9,8.03,17.93,17.93,17.93s17.93-8.03,17.93-17.93c0-1.56-.22-3.07-.6-4.51l121.21-69.98c3.26,3.42,7.86,5.55,12.95,5.55,9.9,0,17.93-8.03,17.93-17.93s-8.03-17.93-17.93-17.93ZM152.78,99.92c-.14.41-.27.83-.38,1.25h-51.47l-44.18-24.72L30.4,30.8c.33-.32.64-.65.94-.99l121.45,70.12ZM22.17,175.2V35.33c.23-.05.45-.11.67-.17l26.35,45.65-.34,50.04-25.74,44.59c-.31-.09-.63-.17-.95-.24ZM31.52,180.69c-.27-.3-.55-.6-.84-.89l25.48-44.13,44.64-25.78h51.47c.07.32.15.63.24.94L31.52,180.69Z" />
-          </svg></span>
-        <span class="brand-text">nodecast-tv</span>
+        <span class="logo">
+          <img src="/img/LurkedTV.png" alt="LurkedTv logo">
+        </span>
+        <span class="brand-text">LurkedTv</span>
         <span id="version-badge" class="version-badge"></span>
       </div>
       <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Toggle menu">
@@ -38,11 +46,6 @@
         <span></span>
       </button>
       <div class="navbar-menu" id="navbar-menu">
-        <!-- Now Playing indicator for movies/series -->
-        <a href="#" class="now-playing-indicator hidden" id="now-playing-indicator" data-page="watch">
-          <span class="now-playing-icon">▶</span>
-          <span class="now-playing-text" id="now-playing-text">Now Playing</span>
-        </a>
         <a href="#" class="nav-link active" data-page="home">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
               class="icon">
@@ -56,14 +59,14 @@
               <path
                 d="M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8a2 2 0 0 0-2-2zm0 14H3V8h18v12zM9 10v8l7-4z" />
             </svg></span>
-          <span>Live TV</span>
+          <span>Live</span>
         </a>
         <a href="#" class="nav-link" data-page="guide">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
               class="icon">
               <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />
             </svg></span>
-          <span>TV Guide</span>
+          <span>Guide</span>
         </a>
         <a href="#" class="nav-link" data-page="movies">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
@@ -89,6 +92,10 @@
             </svg></span>
           <span>Settings</span>
         </a>
+        <div class="navbar-search-wrapper search-wrapper">
+          <input type="text" id="global-search" placeholder="Search movies, series, live tv..." class="search-input">
+          <button type="button" class="search-clear" title="Clear search">&times;</button>
+        </div>
       </div>
     </nav>
 
@@ -98,6 +105,17 @@
       <div id="page-home" class="page active">
         <!-- Content will be rendered by HomePage.js -->
         <div class="loading-state">Loading Dashboard...</div>
+      </div>
+
+      <!-- Global Search Page -->
+      <div id="page-search" class="page">
+        <div class="search-page-content">
+          <div class="search-page-header">
+            <h2 id="search-page-title">Search</h2>
+            <p id="search-page-subtitle" class="hint">Type in the navbar search to find content across movies, series, and live TV.</p>
+          </div>
+          <div id="search-page-results"></div>
+        </div>
       </div>
 
       <!-- Live TV Page (formerly Home) -->
@@ -323,6 +341,9 @@
             <select id="movies-category-select" class="source-select">
               <option value="">All Categories</option>
             </select>
+            <select id="movies-language-select" class="source-select">
+              <option value="">All Languages</option>
+            </select>
             <div class="search-wrapper">
               <input type="text" id="movies-search" placeholder="Search movies..." class="search-input">
               <button type="button" class="search-clear" title="Clear search">&times;</button>
@@ -335,9 +356,27 @@
             </button>
           </div>
         </div>
-        <div id="movies-grid" class="movies-grid">
-          <div class="empty-state">
-            <p>Loading movies...</p>
+        <div class="movies-content">
+          <div id="movies-grid" class="movies-grid">
+            <div class="empty-state">
+              <p>Loading movies...</p>
+            </div>
+          </div>
+          <div id="movie-details" class="movie-details hidden">
+            <button class="movie-back-btn" id="movie-back-btn">&#8592; Back to Movies</button>
+            <div class="movie-details-header">
+              <img id="movie-details-poster" src="" alt="" class="movie-details-poster">
+              <div class="movie-details-info">
+                <h3 id="movie-details-title"></h3>
+                <div id="movie-details-meta" class="movie-details-meta"></div>
+                <p id="movie-details-plot"></p>
+                <div class="movie-details-rating">
+                  <span class="movie-rating-score" id="movie-details-rating-score"></span>
+                  <span class="movie-rating-count" id="movie-details-rating-count"></span>
+                </div>
+                <button class="btn btn-primary" id="movie-details-play-btn">Play Movie</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -352,6 +391,9 @@
             </select>
             <select id="series-category-select" class="source-select">
               <option value="">All Categories</option>
+            </select>
+            <select id="series-language-select" class="source-select">
+              <option value="">All Languages</option>
             </select>
             <div class="search-wrapper">
               <input type="text" id="series-search" placeholder="Search series..." class="search-input">
@@ -379,7 +421,12 @@
               <img id="series-poster" src="" alt="" class="series-poster">
               <div class="series-info">
                 <h3 id="series-title"></h3>
+                <div id="series-details-meta" class="series-details-meta"></div>
                 <p id="series-plot"></p>
+                <div class="series-details-rating">
+                  <span class="series-rating-score" id="series-details-rating-score"></span>
+                  <span class="series-rating-count" id="series-details-rating-count"></span>
+                </div>
               </div>
             </div>
             <div id="series-seasons" class="series-seasons"></div>
@@ -395,6 +442,7 @@
           <!-- Tabs -->
           <div class="tabs">
             <button class="tab active" data-tab="sources">Sources</button>
+            <button class="tab" data-tab="account">Account</button>
             <button class="tab" data-tab="player">Player</button>
             <button class="tab" data-tab="transcode">Transcoding</button>
             <button class="tab" data-tab="content">Manage Content</button>
@@ -444,11 +492,82 @@
                 <span class="setting-label">Last Refreshed:</span>
                 <span id="epg-last-refreshed" class="hint">Never</span>
               </div>
+              <div class="setting-item">
+                <span class="setting-label">Firebase Media Cache:</span>
+                <span id="firebase-cache-last-sync" class="hint">Unknown</span>
+              </div>
+              <div class="setting-item">
+                <button class="btn btn-secondary btn-sm" id="firebase-cache-sync-btn">Sync Media Cache Now</button>
+              </div>
+              <p class="hint">Uploads only Live, Movies, and Series snapshots to Firebase every 24 hours or on-demand.</p>
               <p class="hint">Use the <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
                   class="icon" style="width: 1em; height: 1em; vertical-align: middle;">
                   <path
                     d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
                 </svg> button next to EPG sources for manual refresh</p>
+            </div>
+          </div>
+
+          <!-- Account Tab -->
+          <div id="tab-account" class="tab-content">
+            <div class="settings-section">
+              <h3>Account Status</h3>
+              <div class="setting-item account-status-item">
+                <div class="setting-info">
+                  <span class="setting-label">Email</span>
+                  <span class="setting-hint" id="account-email">-</span>
+                </div>
+                <span class="account-badge" id="account-email-verified-badge">Unknown</span>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Preferences</h3>
+              <div class="setting-item account-settings-stack">
+                <label for="setting-default-language" class="setting-label">Default Language</label>
+                <select id="setting-default-language" class="form-input">
+                  <option value="">Auto (No Default)</option>
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="it">Italian</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ru">Russian</option>
+                  <option value="tr">Turkish</option>
+                  <option value="ar">Arabic</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ja">Japanese</option>
+                  <option value="ko">Korean</option>
+                  <option value="zh">Chinese</option>
+                </select>
+                <span class="setting-hint">Applied by default on Movies and Series pages.</span>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Change Password</h3>
+              <form id="account-password-form" class="account-password-form">
+                <div class="setting-item account-settings-stack">
+                  <label for="setting-current-password" class="setting-label">Current Password</label>
+                  <input type="password" id="setting-current-password" class="form-input" autocomplete="current-password"
+                    minlength="6" required>
+                </div>
+                <div class="setting-item account-settings-stack">
+                  <label for="setting-new-password" class="setting-label">New Password</label>
+                  <input type="password" id="setting-new-password" class="form-input" autocomplete="new-password"
+                    minlength="6" required>
+                </div>
+                <div class="setting-item account-settings-stack">
+                  <label for="setting-confirm-password" class="setting-label">Confirm New Password</label>
+                  <input type="password" id="setting-confirm-password" class="form-input" autocomplete="new-password"
+                    minlength="6" required>
+                </div>
+                <div class="account-actions-row">
+                  <button type="submit" class="btn btn-primary">Update Password</button>
+                  <span class="hint" id="account-password-feedback"></span>
+                </div>
+              </form>
             </div>
           </div>
 
@@ -532,6 +651,10 @@
               <h3>Detected Hardware</h3>
               <div id="hw-info-container" class="hw-info-container">
                 <p class="hint">Loading hardware information...</p>
+              </div>
+              <div class="setting-item">
+                <button class="btn btn-secondary btn-sm" id="auto-optimize-btn">Auto Optimize For This System</button>
+                <span class="hint" id="auto-optimize-feedback"></span>
               </div>
             </div>
 
@@ -832,6 +955,10 @@
                 <h3 class="watch-title" id="watch-title"></h3>
                 <p class="watch-subtitle" id="watch-subtitle"></p>
               </div>
+              <div class="watch-now-playing hidden" id="watch-now-playing-indicator">
+                <span class="watch-now-playing-icon">&#9654;</span>
+                <span class="watch-now-playing-text" id="watch-now-playing-text">Now Playing</span>
+              </div>
               <div class="player-badges">
                 <div class="transcode-status hidden" id="watch-transcode-status">Direct</div>
                 <div class="quality-badge hidden" id="watch-quality-badge"></div>
@@ -850,14 +977,29 @@
               <div class="loading-spinner"></div>
             </div>
 
+            <!-- Resume Prompt -->
+            <div class="watch-resume-prompt hidden" id="watch-resume-prompt">
+              <p class="watch-resume-label">Continue Watching?</p>
+              <p class="watch-resume-time" id="watch-resume-time">Resume from 0:00</p>
+              <div class="watch-resume-actions">
+                <button class="btn btn-primary btn-sm" id="watch-resume-continue-btn">Resume</button>
+                <button class="btn btn-ghost btn-sm" id="watch-resume-restart-btn">Restart</button>
+              </div>
+            </div>
+
             <!-- Bottom Bar: Controls -->
             <div class="watch-bottom-bar">
               <div class="watch-progress-container">
                 <span id="watch-time-current" class="watch-time">0:00</span>
                 <input type="range" class="watch-progress" id="watch-progress" min="0" max="100" value="0" step="0.1">
+                <div class="watch-time-meta">
+                  <span id="watch-time-total" class="watch-time watch-time-total">0:00</span>
+                  <span id="watch-time-remaining" class="watch-time watch-time-remaining">-0:00</span>
+                </div>
+                <div class="watch-seek-preview hidden" id="watch-seek-preview">0:00</div>
               </div>
               <div class="watch-controls">
-                <button class="watch-btn" id="watch-skip-back" title="Back 10 seconds">
+                <button class="watch-btn watch-btn-skip" id="watch-skip-back" title="Back 10 seconds">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon">
                     <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
                   </svg>
@@ -873,7 +1015,7 @@
                     <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
                   </svg>
                 </button>
-                <button class="watch-btn" id="watch-skip-fwd" title="Forward 10 seconds">
+                <button class="watch-btn watch-btn-skip" id="watch-skip-fwd" title="Forward 10 seconds">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon">
                     <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
                   </svg>
@@ -979,6 +1121,12 @@
                     <path d="M8 5v14l11-7z" />
                   </svg>
                   <span id="watch-play-btn-text">Play</span>
+                </button>
+                <button class="btn btn-ghost hidden" id="watch-restart-btn">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                    <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6a6 6 0 1 1-6-6z" />
+                  </svg>
+                  <span>Restart</span>
                 </button>
                 <button class="btn btn-ghost" id="watch-favorite-btn">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
@@ -1096,7 +1244,9 @@
 
   <!-- JavaScript -->
   <script src="/js/icons.js"></script>
-  <script src="/js/api.js?v=2"></script>
+  <script src="/js/api.js?v=3"></script>
+  <script src="/js/utils/galaxyBackground.js?v=2"></script>
+  <script src="/js/utils/LanguageFilter.js?v=1"></script>
   <script src="/js/components/VideoPlayer.js?v=2"></script>
   <script src="/js/components/ChannelList.js?v=3"></script>
   <script src="/js/components/SourceManager.js?v=2"></script>
@@ -1104,25 +1254,52 @@
   <script src="/js/pages/HomePage.js?v=2"></script>
   <script src="/js/pages/LivePage.js?v=2"></script>
   <script src="/js/pages/Guide.js?v=2"></script>
-  <script src="/js/pages/MoviesPage.js?v=4"></script>
-  <script src="/js/pages/SeriesPage.js?v=1"></script>
-  <script src="/js/pages/Settings.js?v=2"></script>
+  <script src="/js/pages/MoviesPage.js?v=5"></script>
+  <script src="/js/pages/SeriesPage.js?v=2"></script>
+  <script src="/js/pages/Settings.js?v=3"></script>
+  <script src="/js/pages/SearchPage.js?v=1"></script>
   <script src="/js/pages/WatchPage.js?v=1"></script>
   <script src="/js/app.js?v=4"></script>
   <script>
     // Check for SSO token in URL
-    (function () {
+    (async function () {
       const urlParams = new URLSearchParams(window.location.search);
       const token = urlParams.get('token');
       if (token) {
         console.log('SSO Login successful, saving token...');
         localStorage.setItem('authToken', token);
+
+        const pendingSource = sessionStorage.getItem('pendingQuickPlaylistSource');
+        if (pendingSource) {
+          try {
+            const sourceData = JSON.parse(pendingSource);
+            const response = await fetch('/api/sources', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify(sourceData)
+            });
+
+            if (!response.ok) {
+              const errData = await response.json().catch(() => ({}));
+              console.warn('Quick playlist setup failed after SSO:', errData.error || response.statusText);
+            }
+          } catch (err) {
+            console.warn('Quick playlist setup failed after SSO:', err.message);
+          } finally {
+            sessionStorage.removeItem('pendingQuickPlaylistSource');
+          }
+        }
+
         // Clean URL without reloading
         const newUrl = window.location.pathname;
         window.history.replaceState({}, document.title, newUrl);
       }
     })();
   </script>
+
 </body>
 
 </html>

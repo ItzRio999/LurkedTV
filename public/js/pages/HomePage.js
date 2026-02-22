@@ -7,6 +7,8 @@ class HomePage {
         this.app = app;
         this.container = null; // Will be set in renderLayout
         this.isLoading = false;
+        this.clockInterval = null;
+        this.use24HourClock = localStorage.getItem('homeClockUse24Hour') === 'true';
     }
 
     async init() {
@@ -15,11 +17,13 @@ class HomePage {
 
     async show() {
         this.renderLayout();
+        this.initWelcomeClock();
         await this.loadDashboardData();
     }
 
     hide() {
         // Cleanup if needed
+        this.stopWelcomeClock();
         if (this.container) {
             this.container.innerHTML = '';
         }
@@ -31,6 +35,21 @@ class HomePage {
 
         pageHome.innerHTML = `
             <div class="dashboard-content" id="home-content">
+                <section class="dashboard-welcome" id="dashboard-welcome">
+                    <div class="dashboard-welcome-copy">
+                        <p class="dashboard-welcome-kicker">Welcome back</p>
+                        <h1 class="dashboard-welcome-title" id="home-welcome-message">Welcome to LurkedTv</h1>
+                        <p class="dashboard-welcome-subtitle">Your stream lineup is ready.</p>
+                    </div>
+                    <div class="dashboard-clock" aria-live="polite">
+                        <div class="dashboard-clock-time" id="home-clock-time">--:--:--</div>
+                        <div class="dashboard-clock-date" id="home-clock-date">Loading date...</div>
+                        <button type="button" class="dashboard-clock-toggle" id="home-clock-toggle">
+                            24-hour
+                        </button>
+                    </div>
+                </section>
+
                 <section class="dashboard-section" id="favorite-channels-section">
                     <div class="section-header">
                         <h2>Favorite Channels</h2>
@@ -118,6 +137,63 @@ class HomePage {
         this.initScrollArrows();
     }
 
+    initWelcomeClock() {
+        const messageEl = document.getElementById('home-welcome-message');
+        const toggleEl = document.getElementById('home-clock-toggle');
+
+        if (messageEl) {
+            const username = this.app?.currentUser?.username;
+            messageEl.textContent = username ? `Welcome back, ${username}` : 'Welcome to LurkedTv';
+        }
+
+        if (toggleEl) {
+            toggleEl.textContent = this.use24HourClock ? '12-hour' : '24-hour';
+            toggleEl.addEventListener('click', () => {
+                this.use24HourClock = !this.use24HourClock;
+                localStorage.setItem('homeClockUse24Hour', this.use24HourClock ? 'true' : 'false');
+                toggleEl.textContent = this.use24HourClock ? '12-hour' : '24-hour';
+                this.updateWelcomeClock();
+            });
+        }
+
+        this.startWelcomeClock();
+    }
+
+    startWelcomeClock() {
+        this.stopWelcomeClock();
+        this.updateWelcomeClock();
+        this.clockInterval = setInterval(() => this.updateWelcomeClock(), 1000);
+    }
+
+    stopWelcomeClock() {
+        if (!this.clockInterval) return;
+        clearInterval(this.clockInterval);
+        this.clockInterval = null;
+    }
+
+    updateWelcomeClock() {
+        const timeEl = document.getElementById('home-clock-time');
+        const dateEl = document.getElementById('home-clock-date');
+        if (!timeEl || !dateEl) return;
+
+        const now = new Date();
+        const timeFormatter = new Intl.DateTimeFormat(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: !this.use24HourClock
+        });
+        const dateFormatter = new Intl.DateTimeFormat(undefined, {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric'
+        });
+
+        timeEl.textContent = timeFormatter.format(now);
+        dateEl.textContent = dateFormatter.format(now);
+    }
+
     initScrollArrows() {
         this.container.querySelectorAll('.scroll-wrapper').forEach(wrapper => {
             const scrollContainer = wrapper.querySelector('.horizontal-scroll');
@@ -170,23 +246,29 @@ class HomePage {
         this.isLoading = true;
 
         try {
-            // 0. Load Favorite Channels (first section)
-            await this.renderFavoriteChannels();
-
-            // 1. Load Watch History
-            const history = await window.API.request('GET', '/history?limit=12');
-            if (history && Array.isArray(history)) {
-                this.renderHistory(history);
-            }
-
-            // 2. Load Recent Items
-            this.renderRecentMovies();
-            this.renderRecentSeries();
+            // Load dashboard sections in parallel to reduce total page wait time.
+            await Promise.allSettled([
+                this.renderFavoriteChannels(),
+                this.loadAndRenderHistory(),
+                this.renderRecentMovies(),
+                this.renderRecentSeries()
+            ]);
 
         } catch (err) {
             console.error('[Dashboard] Error loading data:', err);
         } finally {
             this.isLoading = false;
+        }
+    }
+
+    async loadAndRenderHistory() {
+        try {
+            const history = await window.API.request('GET', '/history?limit=12');
+            if (history && Array.isArray(history)) {
+                this.renderHistory(history);
+            }
+        } catch (err) {
+            console.error('[Dashboard] Error loading history:', err);
         }
     }
 
@@ -204,6 +286,16 @@ class HomePage {
                 return;
             }
 
+            // De-duplicate favorites to prevent repeated tiles.
+            const uniqueFavorites = [];
+            const seenFavoriteKeys = new Set();
+            for (const fav of favorites) {
+                const key = `${fav.source_id}:${fav.item_id}`;
+                if (seenFavoriteKeys.has(key)) continue;
+                seenFavoriteKeys.add(key);
+                uniqueFavorites.push(fav);
+            }
+
             // Ensure channel list is loaded to resolve channel details
             const channelList = this.app.channelList;
             if (!channelList.channels || channelList.channels.length === 0) {
@@ -213,7 +305,7 @@ class HomePage {
 
             // Match favorites to channel data
             const channels = [];
-            for (const fav of favorites) {
+            for (const fav of uniqueFavorites) {
                 // Find channel in loaded channel list
                 const channel = channelList.channels.find(ch =>
                     String(ch.sourceId) === String(fav.source_id) &&
@@ -251,14 +343,14 @@ class HomePage {
     }
 
     createChannelTile(channel) {
-        const logo = channel.tvgLogo || '/img/placeholder.png';
+        const logo = channel.tvgLogo || '/img/LurkedTV.png';
         const logoUrl = logo.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(logo)}` : logo;
         const name = channel.name || 'Unknown';
 
         return `
             <div class="channel-tile" data-channel-id="${channel.id}" data-source-id="${channel.sourceId}">
                 <div class="tile-logo">
-                    <img src="${logoUrl}" alt="${name}" loading="lazy" onerror="this.onerror=null;this.src='/img/placeholder.png'">
+                    <img src="${logoUrl}" alt="${name}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
                 </div>
                 <div class="tile-name" title="${name}">${name}</div>
             </div>
@@ -352,7 +444,8 @@ class HomePage {
         if (!list) return;
 
         try {
-            const movies = await window.API.request('GET', '/channels/recent?type=movie&limit=12');
+            const moviesRaw = await window.API.request('GET', '/channels/recent?type=movie&limit=24');
+            const movies = this.dedupeRecentItems(moviesRaw).slice(0, 12);
             if (!movies || movies.length === 0) {
                 list.innerHTML = '<div class="empty-state hint">No recently added movies found</div>';
                 return;
@@ -381,7 +474,8 @@ class HomePage {
         if (!list) return;
 
         try {
-            const series = await window.API.request('GET', '/channels/recent?type=series&limit=12');
+            const seriesRaw = await window.API.request('GET', '/channels/recent?type=series&limit=24');
+            const series = this.dedupeRecentItems(seriesRaw).slice(0, 12);
             if (!series || series.length === 0) {
                 list.innerHTML = '<div class="empty-state hint">No recently added series found</div>';
                 return;
@@ -405,19 +499,35 @@ class HomePage {
         }
     }
 
+    dedupeRecentItems(items) {
+        if (!Array.isArray(items)) return [];
+
+        const seen = new Set();
+        const unique = [];
+
+        for (const item of items) {
+            const key = `${item.source_id}:${item.item_id}:${item.type || item.item_type}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(item);
+        }
+
+        return unique;
+    }
+
     createCard(item) {
         const { data, progress, duration, item_id } = item;
         const type = item.item_type || item.type;
         const percent = Math.min(100, Math.round((progress / duration) * 100));
 
         // Proxy the poster if it's an external URL
-        const poster = data.poster || '/img/poster-placeholder.jpg';
+        const poster = data.poster || '/img/LurkedTV.png';
         const posterUrl = poster.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(poster)}` : poster;
 
         return `
             <div class="dashboard-card" data-id="${item_id}" data-type="${type}">
                 <div class="card-image">
-                    <img src="${posterUrl}" alt="${data.title || item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/poster-placeholder.jpg'">
+                    <img src="${posterUrl}" alt="${data.title || item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
                     <div class="progress-bar-container">
                         <div class="progress-bar" style="width: ${percent}%"></div>
                     </div>
@@ -436,13 +546,13 @@ class HomePage {
     createRecentCard(item) {
         const { data, item_id } = item;
         const type = item.type || item.item_type;
-        const poster = item.stream_icon || data.poster || '/img/poster-placeholder.jpg';
+        const poster = item.stream_icon || data.poster || '/img/LurkedTV.png';
         const posterUrl = poster.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(poster)}` : poster;
 
         return `
             <div class="dashboard-card" data-id="${item_id}" data-type="${type}">
                 <div class="card-image">
-                    <img src="${posterUrl}" alt="${item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/poster-placeholder.jpg'">
+                    <img src="${posterUrl}" alt="${item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
                     <div class="play-icon-overlay">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                     </div>
@@ -476,6 +586,7 @@ class HomePage {
                     poster: item.stream_icon || item.data.poster,
                     sourceId: sourceId,
                     resumeTime: isResume ? item.progress : 0,
+                    duration: item.duration || (item.data && item.data.duration) || 0,
                     containerExtension: container
                 };
 
@@ -510,3 +621,4 @@ class HomePage {
 }
 
 window.HomePage = HomePage;
+

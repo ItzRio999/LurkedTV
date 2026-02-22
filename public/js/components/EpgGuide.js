@@ -43,7 +43,7 @@ class EpgGuide {
      * Only proxies HTTP URLs when on HTTPS page
      */
     getProxiedImageUrl(url) {
-        if (!url || url.length === 0) return '/img/placeholder.png';
+        if (!url || url.length === 0) return '/img/LurkedTV.png';
         // Only proxy if we're on HTTPS and the image is HTTP
         if (window.location.protocol === 'https:' && url.startsWith('http://')) {
             return `/api/proxy/image?url=${encodeURIComponent(url)}`;
@@ -596,7 +596,7 @@ class EpgGuide {
               ${isFavorite ? Icons.favorite : Icons.favoriteOutline}
             </button>
             <img class="epg-channel-logo" src="${logo}" 
-                 alt="" onerror="this.onerror=null;this.src='/img/placeholder.png'">
+                 alt="" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
             <span class="epg-channel-name">${name}</span>
             <div class="resize-handle"></div>
           </div>
@@ -929,3 +929,4 @@ class EpgGuide {
 
 // Export
 window.EpgGuide = EpgGuide;
+

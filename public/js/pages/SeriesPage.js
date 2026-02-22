@@ -9,6 +9,7 @@ class SeriesPage {
         this.container = document.getElementById('series-grid');
         this.sourceSelect = document.getElementById('series-source-select');
         this.categorySelect = document.getElementById('series-category-select');
+        this.languageSelect = document.getElementById('series-language-select');
         this.searchInput = document.getElementById('series-search');
         this.detailsPanel = document.getElementById('series-details');
         this.seasonsContainer = document.getElementById('series-seasons');
@@ -25,6 +26,7 @@ class SeriesPage {
         this.currentSeries = null;
         this.favoriteIds = new Set(); // Track favorite series IDs
         this.showFavoritesOnly = false;
+        this.categoryNameMap = new Map();
 
         this.init();
     }
@@ -39,6 +41,11 @@ class SeriesPage {
         // Category change handler
         this.categorySelect?.addEventListener('change', () => {
             this.loadSeries();
+        });
+
+        // Language change handler
+        this.languageSelect?.addEventListener('change', () => {
+            this.filterAndRender();
         });
 
         // Search with debounce
@@ -86,11 +93,140 @@ class SeriesPage {
         if (this.seriesList.length === 0) {
             await this.loadCategories();
             await this.loadSeries();
+            return;
         }
+
+        // Ensure grid is rebuilt when returning from Watch/details.
+        this.filterAndRender();
     }
 
     hide() {
         // Page is hidden
+    }
+
+    formatRating(rating) {
+        const value = Number.parseFloat(rating);
+        if (!Number.isFinite(value)) return '';
+        return `${Math.round(value)}`;
+    }
+
+    parseNumber(value, fallback = 0) {
+        if (value === null || value === undefined) return fallback;
+        const parsed = Number.parseFloat(`${value}`.replace(/[^0-9.\-]/g, ''));
+        return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    getReleaseYear(item) {
+        const explicitYear = this.parseNumber(item?.year, 0);
+        if (explicitYear >= 1900 && explicitYear <= 2100) return explicitYear;
+
+        const dateCandidates = [
+            item?.releaseDate,
+            item?.release_date,
+            item?.release,
+            item?.added,
+            item?.date_added
+        ];
+
+        for (const raw of dateCandidates) {
+            if (!raw) continue;
+            if (/^\d{10,13}$/.test(`${raw}`)) {
+                const ms = `${raw}`.length === 13 ? Number(raw) : Number(raw) * 1000;
+                const y = new Date(ms).getUTCFullYear();
+                if (y >= 1900 && y <= 2100) return y;
+            }
+
+            const d = new Date(raw);
+            const y = d.getUTCFullYear();
+            if (Number.isFinite(y) && y >= 1900 && y <= 2100) return y;
+        }
+
+        return 0;
+    }
+
+    getSmartDiscoverScore(series, searchTerm = '') {
+        const nowYear = new Date().getUTCFullYear();
+        const ratingRaw = this.parseNumber(
+            series?.rating ?? series?.imdb_rating ?? series?.tmdb_rating ?? series?.rating_5based,
+            0
+        );
+        const rating10 = ratingRaw <= 5 ? ratingRaw * 2 : ratingRaw;
+        const ratingNorm = Math.max(0, Math.min(1, rating10 / 10));
+
+        const votes = this.parseNumber(
+            series?.votes ?? series?.vote_count ?? series?.num ?? series?.rating_count ?? series?.review_count ?? series?.reviews,
+            0
+        );
+        const votesNorm = Math.max(0, Math.min(1, Math.log10(votes + 1) / 5));
+
+        const year = this.getReleaseYear(series);
+        const age = year > 0 ? Math.max(0, nowYear - year) : 40;
+        const recencyNorm = Math.max(0, Math.min(1, 1 - (age / 25)));
+
+        const isFav = this.favoriteIds.has(`${series.sourceId}:${series.series_id}`) ? 1 : 0;
+        const title = series?.name?.toLowerCase() || '';
+        const searchBonus = searchTerm && title.startsWith(searchTerm) ? 0.06 : 0;
+
+        return (ratingNorm * 0.58) + (votesNorm * 0.22) + (recencyNorm * 0.16) + (isFav * 0.04) + searchBonus;
+    }
+
+    getSeriesRating10(series) {
+        const ratingRaw = this.parseNumber(
+            series?.rating ?? series?.imdb_rating ?? series?.tmdb_rating ?? series?.rating_5based,
+            0
+        );
+        return ratingRaw > 0 ? (ratingRaw <= 5 ? ratingRaw * 2 : ratingRaw) : 0;
+    }
+
+    getSeriesVotes(series) {
+        return Math.max(0, Math.floor(this.parseNumber(
+            series?.votes ?? series?.vote_count ?? series?.num ?? series?.rating_count ?? series?.review_count ?? series?.reviews,
+            0
+        )));
+    }
+
+    formatVotes(count) {
+        if (!Number.isFinite(count) || count <= 0) return 'No rating votes yet';
+        if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M votes`;
+        if (count >= 1000) return `${(count / 1000).toFixed(1)}K votes`;
+        return `${count} votes`;
+    }
+
+    escapeHtml(value) {
+        return `${value ?? ''}`
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    formatEpisodeDate(value) {
+        if (!value) return '';
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    getEpisodeRating10(ep) {
+        const raw = this.parseNumber(
+            ep?.rating ??
+            ep?.info?.rating ??
+            ep?.info?.vote_average ??
+            ep?.movie_data?.rating,
+            0
+        );
+        return raw > 0 ? (raw <= 5 ? raw * 2 : raw) : 0;
+    }
+
+    getEpisodeThumb(ep, seriesPoster = '') {
+        return (
+            ep?.info?.movie_image ||
+            ep?.info?.cover_big ||
+            ep?.cover ||
+            seriesPoster ||
+            '/img/LurkedTV.png'
+        );
     }
 
     async loadFavorites() {
@@ -123,6 +259,7 @@ class SeriesPage {
         try {
             this.categories = [];
             this.hiddenCategoryIds = new Set();
+            this.categoryNameMap = new Map();
             this.categorySelect.innerHTML = '<option value="">All Categories</option>';
 
             const sourceId = this.sourceSelect.value;
@@ -149,6 +286,7 @@ class SeriesPage {
                     const cats = await API.proxy.xtream.seriesCategories(source.id);
                     if (cats && Array.isArray(cats)) {
                         cats.forEach(c => {
+                            this.categoryNameMap.set(`${source.id}:${c.category_id}`, c.category_name);
                             // Skip hidden categories
                             if (!this.hiddenCategoryIds.has(`${source.id}:${c.category_id}`)) {
                                 this.categories.push({ ...c, sourceId: source.id });
@@ -207,10 +345,15 @@ class SeriesPage {
                             if (this.hiddenCategoryIds.has(`${source.id}:${s.category_id}`)) {
                                 return;
                             }
+
+                            const categoryName = this.categoryNameMap.get(`${source.id}:${s.category_id}`) || '';
+                            const languageCode = window.LanguageFilter?.detectLanguage(s, categoryName) || 'unknown';
+
                             this.seriesList.push({
                                 ...s,
                                 sourceId: source.id,
-                                id: `${source.id}:${s.series_id}`
+                                id: `${source.id}:${s.series_id}`,
+                                languageCode
                             });
                         });
                     }
@@ -220,6 +363,7 @@ class SeriesPage {
             }
 
             console.log(`[Series] Total loaded: ${this.seriesList.length} series`);
+            this.updateLanguageOptions();
             this.filterAndRender();
         } catch (err) {
             console.error('Error loading series:', err);
@@ -231,6 +375,8 @@ class SeriesPage {
 
     filterAndRender() {
         const searchTerm = this.searchInput?.value?.toLowerCase() || '';
+        const languageFilter = this.languageSelect?.value || '';
+        const isAllCategories = !this.categorySelect?.value;
 
         this.filteredSeries = this.seriesList.filter(s => {
             // Filter by favorites if enabled
@@ -241,8 +387,26 @@ class SeriesPage {
             if (searchTerm && !s.name?.toLowerCase().includes(searchTerm)) {
                 return false;
             }
+            if (languageFilter && (s.languageCode || 'unknown') !== languageFilter) {
+                return false;
+            }
             return true;
         });
+
+        if (isAllCategories) {
+            this.filteredSeries.sort((a, b) => {
+                const scoreDelta = this.getSmartDiscoverScore(b, searchTerm) - this.getSmartDiscoverScore(a, searchTerm);
+                if (Math.abs(scoreDelta) > 0.0001) return scoreDelta;
+
+                const yearDelta = this.getReleaseYear(b) - this.getReleaseYear(a);
+                if (yearDelta !== 0) return yearDelta;
+
+                const ratingDelta = this.parseNumber(b.rating, 0) - this.parseNumber(a.rating, 0);
+                if (ratingDelta !== 0) return ratingDelta;
+
+                return (a.name || '').localeCompare(b.name || '');
+            });
+        }
 
         console.log(`[Series] Displaying ${this.filteredSeries.length} of ${this.seriesList.length} series`);
 
@@ -269,6 +433,44 @@ class SeriesPage {
         this.observer.observe(loader);
     }
 
+    updateLanguageOptions() {
+        if (!this.languageSelect) return;
+
+        const previousValue = this.languageSelect.value;
+        const counts = new Map();
+
+        this.seriesList.forEach(series => {
+            const code = series.languageCode || 'unknown';
+            counts.set(code, (counts.get(code) || 0) + 1);
+        });
+
+        const options = Array.from(counts.entries())
+            .sort((a, b) => {
+                const labelA = window.LanguageFilter?.getLanguageLabel(a[0]) || 'Unknown';
+                const labelB = window.LanguageFilter?.getLanguageLabel(b[0]) || 'Unknown';
+                return labelA.localeCompare(labelB);
+            });
+
+        this.languageSelect.innerHTML = '<option value="">All Languages</option>';
+        options.forEach(([code, count]) => {
+            const option = document.createElement('option');
+            const label = window.LanguageFilter?.getLanguageLabel(code) || 'Unknown';
+            option.value = code;
+            option.textContent = `${label} (${count})`;
+            this.languageSelect.appendChild(option);
+        });
+
+        const hasPrevious = previousValue && options.some(([code]) => code === previousValue);
+        if (hasPrevious) {
+            this.languageSelect.value = previousValue;
+            return;
+        }
+
+        const preferred = this.app?.currentUser?.defaultLanguage || '';
+        const hasPreferred = preferred && options.some(([code]) => code === preferred);
+        this.languageSelect.value = hasPreferred ? preferred : '';
+    }
+
     renderNextBatch() {
         const start = this.currentBatch * this.batchSize;
         const end = start + this.batchSize;
@@ -288,16 +490,17 @@ class SeriesPage {
             card.dataset.seriesId = series.series_id;
             card.dataset.sourceId = series.sourceId;
 
-            const poster = series.cover || '/img/placeholder.png';
+            const poster = series.cover || '/img/LurkedTV.png';
             const year = series.year || series.releaseDate?.substring(0, 4) || '';
-            const rating = series.rating ? `${Icons.star} ${series.rating}` : '';
+            const normalizedRating = this.getSeriesRating10(series);
+            const rating = normalizedRating > 0 ? `${Icons.star} ${Math.round(normalizedRating)}` : '';
 
             const isFav = this.favoriteIds.has(`${series.sourceId}:${series.series_id}`);
 
             card.innerHTML = `
                 <div class="series-poster">
                     <img src="${poster}" alt="${series.name}" 
-                         onerror="this.onerror=null;this.src='/img/placeholder.png'" loading="lazy">
+                         onerror="this.onerror=null;this.src='/img/LurkedTV.png'" loading="lazy">
                     <div class="series-play-overlay">
                         <span class="play-icon">${Icons.play}</span>
                     </div>
@@ -350,9 +553,12 @@ class SeriesPage {
         this.detailsPanel.classList.remove('hidden');
 
         // Set header info
-        document.getElementById('series-poster').src = series.cover || '/img/placeholder.png';
+        document.getElementById('series-poster').src = series.cover || '/img/LurkedTV.png';
         document.getElementById('series-title').textContent = series.name;
         document.getElementById('series-plot').textContent = series.plot || '';
+        document.getElementById('series-details-meta').innerHTML = '';
+        document.getElementById('series-details-rating-score').textContent = '';
+        document.getElementById('series-details-rating-count').textContent = '';
 
         // Show loading
         this.seasonsContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
@@ -360,6 +566,29 @@ class SeriesPage {
         try {
             // Fetch series info (seasons/episodes)
             const info = await API.proxy.xtream.seriesInfo(series.sourceId, series.series_id);
+            const merged = { ...series, ...(info?.info || {}) };
+            const seasonsObj = info?.episodes || {};
+            const seasonKeys = Object.keys(seasonsObj);
+            const totalEpisodes = seasonKeys.reduce((acc, seasonNum) => {
+                const eps = seasonsObj[seasonNum];
+                return acc + (Array.isArray(eps) ? eps.length : 0);
+            }, 0);
+
+            const year = this.getReleaseYear(merged);
+            const rating10 = this.getSeriesRating10(merged);
+            const votes = this.getSeriesVotes(merged);
+            const metaBits = [];
+            if (year > 0) metaBits.push(`<span>${year}</span>`);
+            if (totalEpisodes > 0) metaBits.push(`<span>${totalEpisodes} Episodes</span>`);
+            if (merged.genre) metaBits.push(`<span>${merged.genre}</span>`);
+
+            document.getElementById('series-details-meta').innerHTML = metaBits.join('');
+            if (rating10 > 0) {
+                document.getElementById('series-details-rating-score').innerHTML = `${Icons.star} ${rating10.toFixed(1)}/10`;
+            } else {
+                document.getElementById('series-details-rating-score').textContent = 'Not Rated';
+            }
+            document.getElementById('series-details-rating-count').textContent = this.formatVotes(votes);
 
             if (!info || !info.episodes) {
                 this.seasonsContainer.innerHTML = '<p class="hint">No episodes found</p>';
@@ -371,24 +600,48 @@ class SeriesPage {
 
             // Render seasons and episodes
             let html = '';
-            const seasons = Object.keys(info.episodes).sort((a, b) => parseInt(a) - parseInt(b));
+            const seasons = seasonKeys.sort((a, b) => parseInt(a) - parseInt(b));
 
-            seasons.forEach(seasonNum => {
+            seasons.forEach((seasonNum, index) => {
                 const episodes = info.episodes[seasonNum];
+                const collapsedClass = index === 0 ? '' : ' collapsed';
                 html += `
-                <div class="season-group">
+                <div class="season-group${collapsedClass}">
                     <div class="season-header">
                         <span class="season-expander">${Icons.chevronDown}</span>
                         <span class="season-name">Season ${seasonNum} (${episodes.length} episodes)</span>
                     </div>
                     <div class="episode-list">
-                        ${episodes.map(ep => `
+                        ${episodes.map(ep => {
+                            const episodeTitle = this.escapeHtml(ep.title || `Episode ${ep.episode_num}`);
+                            const episodeNum = this.escapeHtml(ep.episode_num || '');
+                            const thumb = this.escapeHtml(this.getEpisodeThumb(ep, series.cover || ''));
+                            const duration = this.escapeHtml(ep.duration || ep.info?.duration || '');
+                            const airDate = this.escapeHtml(this.formatEpisodeDate(ep.releaseDate || ep.release_date || ep.air_date || ep.info?.release_date));
+                            const rating10 = this.getEpisodeRating10(ep);
+                            const ratingLabel = rating10 > 0 ? `${rating10.toFixed(1)}/10` : '';
+                            const overviewRaw = ep.info?.plot || ep.info?.description || ep.plot || ep.description || '';
+                            const overview = this.escapeHtml(overviewRaw);
+
+                            const metaBits = [];
+                            if (duration) metaBits.push(`<span>${duration}</span>`);
+                            if (airDate) metaBits.push(`<span>${airDate}</span>`);
+                            if (ratingLabel) metaBits.push(`<span>${Icons.star} ${ratingLabel}</span>`);
+
+                            return `
                             <div class="episode-item" data-episode-id="${ep.id}" data-source-id="${series.sourceId}" data-container="${ep.container_extension || 'mp4'}">
-                                <span class="episode-number">E${ep.episode_num}</span>
-                                <span class="episode-title">${ep.title || `Episode ${ep.episode_num}`}</span>
-                                <span class="episode-duration">${ep.duration || ''}</span>
+                                <img class="episode-thumb" src="${thumb}" alt="${episodeTitle}" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
+                                <div class="episode-main">
+                                    <div class="episode-top">
+                                        <span class="episode-number">E${episodeNum}</span>
+                                        <span class="episode-title">${episodeTitle}</span>
+                                    </div>
+                                    ${metaBits.length ? `<div class="episode-meta">${metaBits.join('')}</div>` : ''}
+                                    ${overview ? `<p class="episode-overview">${overview}</p>` : ''}
+                                </div>
                             </div>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </div>
                 </div>`;
             });
@@ -453,6 +706,7 @@ class SeriesPage {
                         seriesInfo: this.currentSeriesInfo,
                         currentSeason: seasonNum,
                         currentEpisode: episodeNum,
+                        duration: episodeEl.querySelector('.episode-duration')?.textContent?.trim() || '',
                         containerExtension: container
                     }, result.url);
                 }
@@ -499,3 +753,4 @@ class SeriesPage {
 }
 
 window.SeriesPage = SeriesPage;
+

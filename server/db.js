@@ -83,7 +83,63 @@ function getDefaultSettings() {
     // Upscaling settings
     upscaleEnabled: false,
     upscaleMethod: 'hardware',    // hardware | software
-    upscaleTarget: '1080p'        // 1080p | 4k | 720p
+    upscaleTarget: '1080p',       // 1080p | 4k | 720p
+    // Auto profile metadata
+    autoProfileVersion: 0,
+    autoProfileAppliedAt: null,
+    autoProfileSummary: ''
+  };
+}
+
+function computeAutoProfileFromHardware(hw) {
+  const cpu = hw?.cpu || {};
+  const recommended = hw?.recommended || 'software';
+  const logicalThreads = cpu.logicalThreads || 4;
+  const memoryGb = cpu.totalMemoryGb || 8;
+  const hasGpu = recommended !== 'software';
+  const veryLowEnd = !hasGpu && logicalThreads <= 4;
+  const strongCpu = logicalThreads >= 12;
+  const highMemory = memoryGb >= 16;
+  const strongGpu = hasGpu && strongCpu && highMemory;
+
+  let maxResolution = '1080p';
+  let quality = 'medium';
+  let upscaleEnabled = false;
+  let upscaleTarget = '1080p';
+
+  if (veryLowEnd) {
+    maxResolution = '720p';
+    quality = 'low';
+  } else if (strongGpu) {
+    maxResolution = '4k';
+    quality = 'high';
+    upscaleEnabled = true;
+    upscaleTarget = '1080p';
+  } else if (hasGpu) {
+    maxResolution = highMemory ? '1080p' : '720p';
+    quality = strongCpu ? 'high' : 'medium';
+  } else {
+    maxResolution = logicalThreads >= 8 ? '1080p' : '720p';
+    quality = logicalThreads >= 8 ? 'medium' : 'low';
+  }
+
+  return {
+    hwEncoder: hasGpu ? 'auto' : 'software',
+    maxResolution,
+    quality,
+    autoTranscode: true,
+    forceTranscode: false,
+    forceVideoTranscode: false,
+    forceRemux: false,
+    forceProxy: false,
+    streamFormat: 'm3u8',
+    audioMixPreset: 'auto',
+    upscaleEnabled,
+    upscaleMethod: hasGpu ? 'hardware' : 'software',
+    upscaleTarget,
+    probeCacheTTL: hasGpu ? 600 : 300,
+    seriesProbeCacheDays: 7,
+    autoProfileSummary: `${hasGpu ? 'GPU+CPU' : 'CPU-only'} profile (${recommended}, ${logicalThreads} threads, ${memoryGb}GB RAM)`
   };
 }
 
@@ -349,6 +405,29 @@ const settings = {
     db.settings = getDefaultSettings();
     await saveDb(db);
     return db.settings;
+  },
+
+  async applyAutoProfileIfNeeded(hwCapabilities, options = {}) {
+    const { force = false } = options;
+    const PROFILE_VERSION = 1;
+    const db = await loadDb();
+    const current = { ...getDefaultSettings(), ...db.settings };
+
+    if (!force && current.autoProfileVersion >= PROFILE_VERSION) {
+      return { applied: false, settings: current };
+    }
+
+    const profile = computeAutoProfileFromHardware(hwCapabilities || {});
+
+    db.settings = {
+      ...db.settings,
+      ...profile,
+      autoProfileVersion: PROFILE_VERSION,
+      autoProfileAppliedAt: new Date().toISOString()
+    };
+
+    await saveDb(db);
+    return { applied: true, settings: { ...getDefaultSettings(), ...db.settings } };
   }
 };
 
@@ -379,6 +458,11 @@ const users = {
     return db.users?.find(u => u.email === email);
   },
 
+  async getByFirebaseUid(firebaseUid) {
+    const db = await loadDb();
+    return db.users?.find(u => u.firebaseUid === firebaseUid);
+  },
+
   async create(userData) {
     const db = await loadDb();
     if (!db.users) {
@@ -397,7 +481,9 @@ const users = {
       passwordHash: userData.passwordHash || null,
       role: userData.role || 'viewer',
       oidcId: userData.oidcId || null,
+      firebaseUid: userData.firebaseUid || null,
       email: userData.email || null,
+      defaultLanguage: userData.defaultLanguage || '',
       createdAt: new Date().toISOString()
     };
 

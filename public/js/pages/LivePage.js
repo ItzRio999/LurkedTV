@@ -107,3 +107,4 @@ class LivePage {
 }
 
 window.LivePage = LivePage;
+

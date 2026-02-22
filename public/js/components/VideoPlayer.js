@@ -28,6 +28,7 @@ class VideoPlayer {
         this.isUsingProxy = false;
         this.currentUrl = null;
         this.settingsLoaded = false;
+        this.lastRateClampAt = 0;
 
         // Settings - start with defaults, load from server async
         this.settings = this.getDefaultSettings();
@@ -299,6 +300,7 @@ class VideoPlayer {
         });
 
         this.video.addEventListener('volumechange', updateVolumeUI);
+        this.video.addEventListener('ratechange', () => this.enforceNormalPlaybackRate());
 
         // Captions
         this.captionsBtn = document.getElementById('player-captions-btn');
@@ -410,6 +412,21 @@ class VideoPlayer {
         // Initial state
         updatePlayUI();
         updateVolumeUI();
+        this.enforceNormalPlaybackRate(true);
+    }
+
+    enforceNormalPlaybackRate(force = false) {
+        if (!this.video) return;
+        const rate = Number(this.video.playbackRate);
+        if (!Number.isFinite(rate) || Math.abs(rate - 1) < 0.001) return;
+
+        const now = Date.now();
+        if (!force && now - this.lastRateClampAt < 400) return;
+
+        this.lastRateClampAt = now;
+        console.warn(`[Player] Correcting unexpected playbackRate ${rate} -> 1`);
+        this.video.playbackRate = 1;
+        this.video.defaultPlaybackRate = 1;
     }
 
     /**
@@ -1395,6 +1412,8 @@ class VideoPlayer {
             this.hls.destroy();
             this.hls = null;
         }
+        this.video.playbackRate = 1;
+        this.video.defaultPlaybackRate = 1;
         this.video.pause();
         this.video.src = '';
         this.video.load();
@@ -1568,3 +1587,4 @@ class VideoPlayer {
 
 // Export
 window.VideoPlayer = VideoPlayer;
+
