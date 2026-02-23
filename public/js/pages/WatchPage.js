@@ -94,8 +94,6 @@ class WatchPage {
         this.nextEpisodeShowing = false;
         this.nextEpisodeDismissed = false;
 
-        // Watch history
-        this.historyInterval = null;
         this.probeCache = new Map();
 
         // Smart anti-buffer state
@@ -121,6 +119,9 @@ class WatchPage {
         this.knownDurationSeconds = 0;
         this.currentSessionOptions = null;
         this.sessionSeekInFlight = false;
+        this.sessionRestartInFlight = false;
+        this.lastSessionRestartAt = 0;
+        this.hlsLoadToken = 0;
 
         this.init();
     }
@@ -296,6 +297,9 @@ class WatchPage {
      * @param {string} streamUrl - Stream URL
      */
     async play(content, streamUrl) {
+        // Save and teardown any currently playing item before switching context.
+        this.stop();
+
         this.content = content;
         this.contentType = content.type;
         this.seriesInfo = content.seriesInfo || null;
@@ -325,7 +329,7 @@ class WatchPage {
         this.subtitleEl.textContent = content.subtitle || '';
 
         // Load video
-        await this.loadVideo(streamUrl);
+        await this.loadVideo(streamUrl, { skipStop: true });
 
         // Show Now Playing indicator in navbar
         this.showNowPlaying(content.title);
@@ -349,8 +353,6 @@ class WatchPage {
         // Show overlay initially
         this.showOverlay();
 
-        // Start watch history tracking
-        this.startHistoryTracking();
     }
 
     /**
@@ -425,6 +427,45 @@ class WatchPage {
         }
         this.currentSessionOptions = null;
         this.transcodeBaseOffset = 0;
+    }
+
+    extractSessionIdFromPlaylistUrl(url = '') {
+        const match = String(url || '').match(/\/api\/transcode\/([^/]+)\/stream\.m3u8(?:\?|$)/);
+        return match?.[1] || null;
+    }
+
+    isTranscodePlaylistUrl(url = '') {
+        return !!this.extractSessionIdFromPlaylistUrl(url);
+    }
+
+    async restartCurrentTranscodeSession(reason = 'recovery') {
+        if (this.sessionRestartInFlight) return false;
+        if (!this.currentUrl || !this.currentSessionOptions) return false;
+
+        const now = Date.now();
+        if (now - this.lastSessionRestartAt < 1500) return false;
+
+        this.sessionRestartInFlight = true;
+        this.lastSessionRestartAt = now;
+
+        const restartOptions = {
+            ...this.currentSessionOptions,
+            seekOffset: Math.max(0, Math.floor(this.getAbsoluteCurrentTime()))
+        };
+
+        try {
+            console.warn(`[WatchPage] Restarting transcode session (${reason})...`);
+            await this.stopTranscodeSession();
+            const playlistUrl = await this.startTranscodeSession(this.currentUrl, restartOptions);
+            this.playHls(playlistUrl);
+            this.setVolumeFromStorage();
+            return true;
+        } catch (err) {
+            console.warn(`[WatchPage] Transcode restart failed (${reason}):`, err?.message || err);
+            return false;
+        } finally {
+            this.sessionRestartInFlight = false;
+        }
     }
 
     async updateTranscodeStatus(mode, text) {
@@ -528,13 +569,15 @@ class WatchPage {
         this.updateTimeLabels(current, this.getSeekableDuration());
     }
 
-    async loadVideo(url) {
+    async loadVideo(url, options = {}) {
         // Store the URL for copy functionality
         this.currentUrl = url;
         this.resetAntiBufferState();
 
-        // Stop any existing playback
-        this.stop();
+        if (!options.skipStop) {
+            // Stop any existing playback
+            this.stop();
+        }
 
         // Show loading spinner
         this.showLoading();
@@ -689,6 +732,7 @@ class WatchPage {
      */
     playHls(url) {
         this.lastResolvedPlaybackUrl = url;
+        const loadToken = ++this.hlsLoadToken;
 
         if (this.hls) {
             this.hls.destroy();
@@ -712,16 +756,19 @@ class WatchPage {
 
         // Listen for subtitle track updates
         this.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (event, data) => {
+            if (loadToken !== this.hlsLoadToken) return;
             console.log('[WatchPage] Subtitle tracks updated:', data.subtitleTracks);
             // Wait a moment for native text tracks to populate
             setTimeout(() => this.updateCaptionsTracks(), 100);
         });
 
         this.hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, (event, data) => {
+            if (loadToken !== this.hlsLoadToken) return;
             console.log('[WatchPage] Subtitle track switched:', data);
         });
 
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (loadToken !== this.hlsLoadToken) return;
             this.video.play().catch(e => {
                 if (e.name !== 'AbortError') console.error('[WatchPage] Autoplay error:', e);
             });
@@ -730,6 +777,7 @@ class WatchPage {
         });
 
         this.hls.on(Hls.Events.ERROR, (event, data) => {
+            if (loadToken !== this.hlsLoadToken) return;
             if (!data?.fatal) {
                 if (data?.details === 'bufferStalledError') {
                     this.handlePlaybackStall('hls_buffer_stalled');
@@ -739,6 +787,39 @@ class WatchPage {
 
             if (data.fatal) {
                 console.error('[WatchPage] HLS fatal error:', data);
+
+                const statusCode = Number(
+                    data?.response?.code ??
+                    data?.networkDetails?.status ??
+                    data?.loader?.stats?.responseCode ??
+                    0
+                );
+                const failedUrl = String(data?.url || '');
+                const failedSessionId = this.extractSessionIdFromPlaylistUrl(failedUrl);
+                const isTranscodeManifestError = this.isTranscodePlaylistUrl(failedUrl) ||
+                    this.isTranscodePlaylistUrl(url);
+                const detail = String(data?.details || '').toLowerCase();
+                const isManifestOrLevelLoadError = detail.includes('manifestloaderror') || detail.includes('levelloaderror');
+                const hasCurrentSession = !!this.currentSessionId;
+                const staleSession = !!(failedSessionId && this.currentSessionId && failedSessionId !== this.currentSessionId);
+                const currentSessionFailed = !!(failedSessionId && this.currentSessionId && failedSessionId === this.currentSessionId);
+
+                // hls.js does not consistently expose HTTP status on level/manifest load failures,
+                // so session mismatch or explicit 404/410 should immediately trigger a fresh session.
+                if (isTranscodeManifestError && staleSession) {
+                    this.restartCurrentTranscodeSession('manifest_stale_session');
+                    return;
+                }
+
+                if (isTranscodeManifestError && (statusCode === 404 || statusCode === 410) && (currentSessionFailed || hasCurrentSession)) {
+                    this.restartCurrentTranscodeSession(`manifest_${statusCode}`);
+                    return;
+                }
+
+                if (isTranscodeManifestError && isManifestOrLevelLoadError && hasCurrentSession && statusCode === 0) {
+                    this.restartCurrentTranscodeSession(`manifest_or_level_${detail || 'unknown'}`);
+                    return;
+                }
                 // Try proxy on CORS error (only if not already proxied/transcoded)
                 // Note: Transcoded streams are local, so no CORS issues usually
                 if (!url.startsWith('/api/') && (data.type === Hls.ErrorTypes.NETWORK_ERROR)) {
@@ -754,10 +835,12 @@ class WatchPage {
         });
 
         this.hls.on(Hls.Events.BUFFER_STALLED_ERROR, () => {
+            if (loadToken !== this.hlsLoadToken) return;
             this.handlePlaybackStall('hls_buffer_stalled_event');
         });
 
         this.hls.on(Hls.Events.FRAG_LOADED, () => {
+            if (loadToken !== this.hlsLoadToken) return;
             this.markPlaybackHealthy();
         });
     }
@@ -769,9 +852,6 @@ class WatchPage {
     }
 
     stop() {
-        // Stop history tracking and save final progress
-        this.stopHistoryTracking();
-        this.saveProgress();
         this.stopPlaybackHealthMonitor();
 
         // Cleanup transcode session if exists
@@ -788,6 +868,7 @@ class WatchPage {
             this.hls.destroy();
             this.hls = null;
         }
+        this.hlsLoadToken += 1;
 
         if (this.stallRecoveryTimeout) {
             clearTimeout(this.stallRecoveryTimeout);
@@ -1040,7 +1121,6 @@ class WatchPage {
             this.updateQualityBadge();
         }
 
-        // Metadata hook reserved for quality badge only.
     }
 
     onPlay() {
@@ -1522,7 +1602,12 @@ class WatchPage {
 
         if (this.consecutiveStalls >= 5 && this.lastResolvedPlaybackUrl) {
             console.warn('[WatchPage] Reinitializing HLS player after repeated stalls');
-            this.playHls(this.lastResolvedPlaybackUrl);
+            const isSessionPlayback = this.isTranscodePlaylistUrl(this.lastResolvedPlaybackUrl);
+            if (isSessionPlayback && this.currentSessionId && this.currentSessionOptions) {
+                this.restartCurrentTranscodeSession('repeated_stalls');
+            } else {
+                this.playHls(this.lastResolvedPlaybackUrl);
+            }
         }
     }
 
@@ -2050,55 +2135,6 @@ class WatchPage {
         // Called when page becomes hidden
         // Don't stop playback here - allow background playback
         this.cancelNextEpisode();
-    }
-    // ============================================================
-    // Watch History Tracking
-    // ============================================================
-
-    startHistoryTracking() {
-        this.stopHistoryTracking(); // Clear existing if any
-        this.historyInterval = setInterval(() => this.saveProgress(), 10000); // 10s
-    }
-
-    stopHistoryTracking() {
-        if (this.historyInterval) {
-            clearInterval(this.historyInterval);
-            this.historyInterval = null;
-        }
-    }
-
-    async saveProgress() {
-        if (!this.content || !this.video) return;
-
-        const progress = Math.floor(this.getAbsoluteCurrentTime());
-        const duration = Math.floor(this.getSeekableDuration());
-
-        if (isNaN(progress) || isNaN(duration) || duration <= 0) return;
-
-        try {
-            const data = {
-                title: this.content.title || 'Unknown Title',
-                subtitle: this.content.subtitle || (this.content.type === 'movie' ? 'Movie' : 'Series'),
-                poster: this.content.poster,
-                sourceId: this.content.sourceId,
-                containerExtension: this.containerExtension,
-                // Series-specific fields for next episode functionality
-                seriesId: this.content.seriesId || null,
-                currentSeason: this.currentSeason || null,
-                currentEpisode: this.currentEpisode || null
-            };
-
-            await window.API.request('POST', '/history', {
-                id: this.content.id,
-                type: this.content.type === 'movie' ? 'movie' : 'episode',
-                sourceId: this.content.sourceId,
-                progress,
-                duration,
-                data
-            });
-        } catch (err) {
-            console.warn('[History] Failed to save progress:', err);
-        }
     }
 }
 

@@ -112,6 +112,7 @@ class App {
         // Navigation handling
         document.querySelectorAll('.nav-link').forEach(link => {
             link.addEventListener('click', (e) => {
+                if (!link.dataset.page) return; // skip action links (logout, etc.)
                 e.preventDefault();
                 this.navigateTo(link.dataset.page);
             });
@@ -317,8 +318,8 @@ class App {
 
             this.currentUser = await response.json();
 
-            // Add logout button to navbar
-            this.addLogoutButton();
+            // Wire up profile dropdown
+            this.initProfileDropdown();
 
         } catch (err) {
             console.error('Authentication error:', err);
@@ -327,58 +328,128 @@ class App {
         }
     }
 
-    addLogoutButton() {
-        const navbar = document.querySelector('.navbar-menu');
-        if (!navbar || document.getElementById('logout-btn')) return;
+    async performLogout() {
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            await fetch('/api/auth/logout', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            }).catch(() => {});
+        }
+        localStorage.removeItem('authToken');
+        window.location.replace('/login.html');
+    }
 
-        const logoutLink = document.createElement('a');
-        logoutLink.href = '#';
-        logoutLink.className = 'nav-link';
-        logoutLink.id = 'logout-btn';
-        logoutLink.innerHTML = `
-            <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon">
-                <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
-            </svg></span>
-            <span>Logout</span>
-        `;
+    initProfileDropdown() {
+        const user = this.currentUser;
+        const profileEl = document.getElementById('navbar-profile');
+        const profileBtn = document.getElementById('profile-btn');
+        const dropdown = document.getElementById('profile-dropdown');
+        const displayName = document.getElementById('profile-display-name');
+        const displayEmail = document.getElementById('profile-display-email');
+        const settingsBtn = document.getElementById('profile-settings-btn');
+        const logoutBtn = document.getElementById('profile-logout-btn');
+        const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
 
-        logoutLink.addEventListener('click', async (e) => {
-            e.preventDefault();
+        if (!profileEl || !profileBtn || !dropdown) return;
 
-            const token = localStorage.getItem('authToken');
-            if (token) {
-                await fetch('/api/auth/logout', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
+        // Populate user info
+        if (displayName) displayName.textContent = user?.username || user?.email || 'User';
+        if (displayEmail) displayEmail.textContent = user?.email || '';
+
+        const openDropdown = () => {
+            profileEl.classList.add('open');
+            profileBtn.setAttribute('aria-expanded', 'true');
+            dropdown.setAttribute('aria-hidden', 'false');
+            // Inline fallback so the menu still opens if CSS state rules are stale/cached.
+            dropdown.style.opacity = '1';
+            dropdown.style.transform = 'translateY(0) scale(1)';
+            dropdown.style.pointerEvents = 'all';
+            dropdown.style.visibility = 'visible';
+        };
+
+        const closeDropdown = () => {
+            profileEl.classList.remove('open');
+            profileBtn.setAttribute('aria-expanded', 'false');
+            dropdown.setAttribute('aria-hidden', 'true');
+            dropdown.style.opacity = '';
+            dropdown.style.transform = '';
+            dropdown.style.pointerEvents = '';
+            dropdown.style.visibility = '';
+        };
+
+        const toggleDropdown = () => {
+            if (profileEl.classList.contains('open')) {
+                closeDropdown();
+            } else {
+                openDropdown();
             }
+        };
 
-            localStorage.removeItem('authToken');
-            window.location.replace('/login.html');
+        // Initial accessibility state
+        profileBtn.setAttribute('aria-haspopup', 'menu');
+        profileBtn.setAttribute('aria-expanded', 'false');
+        dropdown.setAttribute('aria-hidden', 'true');
+
+        profileBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleDropdown();
         });
 
-        navbar.appendChild(logoutLink);
+        // Close on outside click
+        document.addEventListener('click', (e) => {
+            if (!profileEl.contains(e.target)) closeDropdown();
+        });
+
+        // Close on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeDropdown();
+        });
+
+        // Settings button
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', () => {
+                closeDropdown();
+                this.navigateTo('settings');
+            });
+        }
+
+        // Desktop logout
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => this.performLogout());
+        }
+
+        // Mobile logout
+        if (mobileLogoutBtn) {
+            mobileLogoutBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.performLogout();
+            });
+        }
     }
 
     setupGlobalSearch() {
-        const input = document.getElementById('global-search');
-        if (!input || !this.pages.search) return;
+        if (!this.pages.search) return;
 
-        let searchTimer = null;
-        input.addEventListener('input', () => {
-            clearTimeout(searchTimer);
-            const query = input.value.trim();
-            searchTimer = setTimeout(() => {
-                this.pages.search.setQuery(query, true);
-            }, 250);
-        });
+        // Wire both desktop and mobile search inputs
+        ['global-search', 'global-search-mobile'].forEach(id => {
+            const input = document.getElementById(id);
+            if (!input) return;
 
-        input.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            this.pages.search.setQuery(input.value.trim(), true);
+            let searchTimer = null;
+            input.addEventListener('input', () => {
+                clearTimeout(searchTimer);
+                const query = input.value.trim();
+                searchTimer = setTimeout(() => {
+                    this.pages.search.setQuery(query, true);
+                }, 250);
+            });
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                this.pages.search.setQuery(input.value.trim(), true);
+            });
         });
     }
 

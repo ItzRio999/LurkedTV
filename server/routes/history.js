@@ -19,11 +19,21 @@ router.get('/', (req, res) => {
         const rows = db.prepare(`
             SELECT * FROM watch_history 
             WHERE user_id = ? 
-            ORDER BY updated_at DESC 
-            LIMIT ?
-        `).all(userId, limit);
+            ORDER BY updated_at DESC
+        `).all(userId);
 
-        const history = rows.map(row => ({
+        // De-duplicate legacy rows by source/type/item and keep most recent entry.
+        const seen = new Set();
+        const uniqueRows = [];
+        for (const row of rows) {
+            const key = `${row.source_id || 0}:${row.item_type || ''}:${row.item_id || ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            uniqueRows.push(row);
+            if (uniqueRows.length >= limit) break;
+        }
+
+        const history = uniqueRows.map(row => ({
             ...row,
             data: JSON.parse(row.data || '{}')
         }));
@@ -36,6 +46,63 @@ router.get('/', (req, res) => {
 });
 
 /**
+ * GET /api/history/item/:itemId
+ * Returns a single history row for a specific item/source/type
+ */
+router.get('/item/:itemId', (req, res) => {
+    try {
+        const db = getDb();
+        const userId = req.user.id;
+        const itemId = req.params.itemId;
+        const sourceId = req.query.sourceId !== undefined ? Number(req.query.sourceId) : null;
+        const type = req.query.type ? String(req.query.type) : null;
+
+        let row;
+        if (sourceId !== null && Number.isFinite(sourceId) && type) {
+            row = db.prepare(`
+                SELECT * FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND source_id = ? AND item_type = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+            `).get(userId, itemId, sourceId, type);
+        } else if (sourceId !== null && Number.isFinite(sourceId)) {
+            row = db.prepare(`
+                SELECT * FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND source_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+            `).get(userId, itemId, sourceId);
+        } else if (type) {
+            row = db.prepare(`
+                SELECT * FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND item_type = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+            `).get(userId, itemId, type);
+        } else {
+            row = db.prepare(`
+                SELECT * FROM watch_history
+                WHERE user_id = ? AND item_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+            `).get(userId, itemId);
+        }
+
+        if (!row) {
+            return res.status(404).json({ error: 'Item not found in history' });
+        }
+
+        res.json({
+            ...row,
+            data: JSON.parse(row.data || '{}')
+        });
+    } catch (err) {
+        console.error('[History] Error fetching single history item:', err);
+        res.status(500).json({ error: 'Failed to fetch history item' });
+    }
+});
+
+/**
  * POST /api/history
  * Saves/updates watch progress for an item
  */
@@ -43,14 +110,37 @@ router.post('/', (req, res) => {
     try {
         const db = getDb();
         const userId = req.user.id;
-        const { id, type, parentId, progress, duration, data, sourceId } = req.body;
+        const { id, type, parentId, progress, duration, data, sourceId, completed } = req.body;
 
         if (!id || !type) {
             return res.status(400).json({ error: 'Missing required fields (id, type)' });
         }
 
-        const compositeId = `${userId}:${id}`;
+        const normalizedType = type === 'movie' ? 'movie' : 'episode';
+        const normalizedSourceId = sourceId !== undefined && sourceId !== null && Number.isFinite(Number(sourceId))
+            ? Number(sourceId)
+            : 0;
+        const compositeId = `${userId}:${normalizedSourceId}:${normalizedType}:${id}`;
         const timestamp = Date.now();
+        const numericDuration = Math.max(0, Number(duration) || 0);
+        const numericProgress = Math.max(0, Number(progress) || 0);
+
+        const isCompleted = !!completed || (
+            numericDuration > 0 && (
+                numericProgress >= numericDuration ||
+                (numericDuration - numericProgress) <= 15 ||
+                (numericProgress / numericDuration) >= 0.98
+            )
+        );
+
+        if (isCompleted) {
+            const deleteStmt = db.prepare(`
+                DELETE FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND source_id = ? AND item_type = ?
+            `);
+            deleteStmt.run(userId, id.toString(), normalizedSourceId, normalizedType);
+            return res.json({ success: true, removed: true, timestamp });
+        }
 
         const stmt = db.prepare(`
             INSERT INTO watch_history (id, user_id, source_id, item_type, item_id, parent_id, progress, duration, updated_at, data)
@@ -66,12 +156,12 @@ router.post('/', (req, res) => {
         stmt.run(
             compositeId,
             userId,
-            sourceId || null,
-            type,
+            normalizedSourceId,
+            normalizedType,
             id.toString(),
             parentId ? parentId.toString() : null,
-            progress || 0,
-            duration || 0,
+            numericProgress,
+            numericDuration,
             timestamp,
             JSON.stringify(data || {})
         );
@@ -84,6 +174,23 @@ router.post('/', (req, res) => {
 });
 
 /**
+ * DELETE /api/history
+ * Clears all watch history rows for authenticated user
+ */
+router.delete('/', (req, res) => {
+    try {
+        const db = getDb();
+        const userId = req.user.id;
+        const stmt = db.prepare('DELETE FROM watch_history WHERE user_id = ?');
+        const result = stmt.run(userId);
+        res.json({ success: true, removed: result.changes || 0 });
+    } catch (err) {
+        console.error('[History] Error clearing history:', err);
+        res.status(500).json({ error: 'Failed to clear history' });
+    }
+});
+
+/**
  * DELETE /api/history/:itemId
  * Removes an item from the user's watch history
  */
@@ -92,17 +199,34 @@ router.delete('/:itemId', (req, res) => {
         const db = getDb();
         const userId = req.user.id;
         const itemId = req.params.itemId;
+        const sourceId = req.query.sourceId !== undefined ? Number(req.query.sourceId) : null;
+        const type = req.query.type ? String(req.query.type) : null;
 
-        const compositeId = `${userId}:${itemId}`;
-
-        const stmt = db.prepare('DELETE FROM watch_history WHERE id = ? AND user_id = ?');
-        const result = stmt.run(compositeId, userId);
-
-        if (result.changes === 0) {
-            return res.status(404).json({ error: 'Item not found in history' });
+        let result;
+        if (sourceId !== null && Number.isFinite(sourceId) && type) {
+            const stmt = db.prepare(`
+                DELETE FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND source_id = ? AND item_type = ?
+            `);
+            result = stmt.run(userId, itemId, sourceId, type);
+        } else if (sourceId !== null && Number.isFinite(sourceId)) {
+            const stmt = db.prepare(`
+                DELETE FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND source_id = ?
+            `);
+            result = stmt.run(userId, itemId, sourceId);
+        } else if (type) {
+            const stmt = db.prepare(`
+                DELETE FROM watch_history
+                WHERE user_id = ? AND item_id = ? AND item_type = ?
+            `);
+            result = stmt.run(userId, itemId, type);
+        } else {
+            const stmt = db.prepare('DELETE FROM watch_history WHERE user_id = ? AND item_id = ?');
+            result = stmt.run(userId, itemId);
         }
 
-        res.json({ success: true });
+        res.json({ success: true, removed: result.changes > 0 });
     } catch (err) {
         console.error('[History] Error deleting history item:', err);
         res.status(500).json({ error: 'Failed to delete history item' });

@@ -73,6 +73,7 @@ class HomePage {
                 <section class="dashboard-section" id="continue-watching-section">
                     <div class="section-header">
                         <h2>Continue Watching</h2>
+                        <button type="button" class="continue-clear-btn" id="continue-watching-clear-btn">Clear</button>
                     </div>
                     <div class="scroll-wrapper">
                         <button class="scroll-arrow scroll-left" aria-label="Scroll left">
@@ -135,6 +136,33 @@ class HomePage {
 
         // Attach scroll arrow handlers
         this.initScrollArrows();
+        this.bindContinueWatchingActions();
+    }
+
+    bindContinueWatchingActions() {
+        const clearBtn = document.getElementById('continue-watching-clear-btn');
+        if (!clearBtn) return;
+
+        clearBtn.addEventListener('click', async () => {
+            const confirmed = window.confirm('Clear all items from Continue Watching?');
+            if (!confirmed) return;
+
+            const list = document.getElementById('continue-watching-list');
+            const section = document.getElementById('continue-watching-section');
+            clearBtn.disabled = true;
+
+            try {
+                await window.API.request('DELETE', '/history');
+                if (list) {
+                    list.innerHTML = '<div class="empty-state hint">No items in Continue Watching</div>';
+                }
+                section?.classList.add('hidden');
+            } catch (err) {
+                console.error('[Dashboard] Error clearing history:', err);
+            } finally {
+                clearBtn.disabled = false;
+            }
+        });
     }
 
     initWelcomeClock() {
@@ -388,25 +416,38 @@ class HomePage {
 
         if (!list || !section) return;
 
-        if (items.length === 0) {
+        const dedupedItems = this.dedupeHistoryItems(items || []);
+        const activeItems = dedupedItems.filter(item => {
+            const normalized = this.normalizeHistoryTiming(item);
+            const progress = Number(normalized.progress || 0);
+            const duration = Number(normalized.duration || 0);
+            if (!Number.isFinite(duration) || duration <= 0) return false;
+            if (!Number.isFinite(progress) || progress <= 0) return false;
+            const remaining = duration - progress;
+            const percent = progress / duration;
+            return remaining > 15 && percent < 0.98;
+        });
+
+        if (activeItems.length === 0) {
             section.classList.add('hidden');
             return;
         }
 
         section.classList.remove('hidden');
-        list.innerHTML = items.map(item => this.createCard(item)).join('');
+        list.innerHTML = activeItems.map(item => this.createCard(item)).join('');
 
         // Attach click listeners
         list.querySelectorAll('.dashboard-card').forEach(card => {
             card.addEventListener('click', () => {
                 const id = card.dataset.id;
-                const item = items.find(i => i.item_id === id);
+                const sourceId = card.dataset.sourceId;
+                const type = card.dataset.type;
+                const item = activeItems.find(i =>
+                    String(i.item_id) === String(id) &&
+                    String(i.source_id || i?.data?.sourceId || '') === String(sourceId || '') &&
+                    String(i.item_type || i.type || '') === String(type || '')
+                );
                 if (item) {
-                    const type = item.item_type || item.type;
-
-                    // IF it's a series, checking details is better than blind resume
-                    // BUT for "Continue Watching", we ideally want to resume
-
                     // Prioritize playing directly for resume tiles
                     this.playItem(item, true); // true for resume
                 }
@@ -415,6 +456,22 @@ class HomePage {
 
         // Update scroll arrows after content renders
         this.updateScrollArrows();
+    }
+
+    dedupeHistoryItems(items) {
+        const seen = new Set();
+        const unique = [];
+
+        for (const item of items) {
+            const sourceId = item.source_id ?? item?.data?.sourceId ?? 0;
+            const itemType = item.item_type || item.type || '';
+            const key = `${sourceId}:${itemType}:${item.item_id}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(item);
+        }
+
+        return unique;
     }
 
     navigateToSeries(item) {
@@ -506,7 +563,12 @@ class HomePage {
         const unique = [];
 
         for (const item of items) {
-            const key = `${item.source_id}:${item.item_id}:${item.type || item.item_type}`;
+            const itemType = item.type || item.item_type || '';
+            const normalizedTitle = this.normalizeCatalogTitle(item.name || item?.data?.title || '');
+            const year = String(item.year || item?.data?.year || '').trim();
+            const key = normalizedTitle
+                ? `${item.source_id}:${itemType}:${normalizedTitle}:${year}`
+                : `${item.source_id}:${item.item_id}:${itemType}`;
             if (seen.has(key)) continue;
             seen.add(key);
             unique.push(item);
@@ -515,29 +577,121 @@ class HomePage {
         return unique;
     }
 
+    normalizeCatalogTitle(rawTitle) {
+        let title = String(rawTitle || '').trim();
+        if (!title) return '';
+
+        // Remove common release/source prefixes repeatedly (e.g. "EN 4K-AMZ AMZ - Movie Name").
+        const prefixPattern = /^(?:\[[^\]]+\]\s*|\([^)]+\)\s*|(?:EN|ENG|MULTI|MULTI-SUB|SUB|DUB|4K|UHD|FHD|HD|SD|AMZ|NF|NETFLIX|DSNP|DSNP\+|HMAX|MAX|HULU|ATVP|APPLETV|WEB|WEB-DL|WEBRIP|BLURAY|BDRIP|HDRIP|DVDRIP|X264|X265|HEVC|AAC|DDP5\.1|DD5\.1|IMAX|EXTENDED|REMASTERED)(?:[\s._-]+))+/i;
+        while (prefixPattern.test(title)) {
+            title = title.replace(prefixPattern, '').trim();
+        }
+
+        // Drop leading separators left behind after prefix stripping.
+        title = title.replace(/^[-:|._\s]+/, '').trim();
+
+        // Normalize spacing/punctuation for stable comparison.
+        return title
+            .toLowerCase()
+            .replace(/['"`]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+    }
+
+    parseDurationToSeconds(value) {
+        if (value === null || value === undefined) return 0;
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+            return value > 3600 * 12 ? Math.floor(value / 1000) : Math.floor(value);
+        }
+
+        const text = String(value).trim();
+        if (!text) return 0;
+
+        if (/^\d+(\.\d+)?$/.test(text)) {
+            const n = Number(text);
+            if (Number.isFinite(n) && n > 0) {
+                return n > 3600 * 12 ? Math.floor(n / 1000) : Math.floor(n);
+            }
+        }
+
+        const parts = text.split(':').map(s => Number(s));
+        if (parts.length === 3 && parts.every(Number.isFinite)) {
+            return Math.max(0, Math.floor(parts[0] * 3600 + parts[1] * 60 + parts[2]));
+        }
+        if (parts.length === 2 && parts.every(Number.isFinite)) {
+            return Math.max(0, Math.floor(parts[0] * 60 + parts[1]));
+        }
+
+        const h = text.match(/(\d+(?:\.\d+)?)\s*h/i);
+        const m = text.match(/(\d+(?:\.\d+)?)\s*m/i);
+        const s = text.match(/(\d+(?:\.\d+)?)\s*s/i);
+        if (h || m || s) {
+            const hh = h ? Number(h[1]) : 0;
+            const mm = m ? Number(m[1]) : 0;
+            const ss = s ? Number(s[1]) : 0;
+            return Math.max(0, Math.floor(hh * 3600 + mm * 60 + ss));
+        }
+
+        return 0;
+    }
+
+    normalizeHistoryTiming(item) {
+        const data = item?.data || {};
+        let progress = Number(item?.progress || 0);
+        let duration = Number(item?.duration || 0);
+        if (!Number.isFinite(progress)) progress = 0;
+        if (!Number.isFinite(duration)) duration = 0;
+
+        const metadataDuration = this.parseDurationToSeconds(
+            data.duration || data.runtime || data.totalDuration || 0
+        );
+
+        let factor = 1;
+        if (duration > 432000) {
+            factor = 1 / 1000;
+        } else if (metadataDuration > 0 && duration > 0) {
+            const ratio = metadataDuration / duration;
+            if (ratio > 45 && ratio < 75) {
+                factor = 60;
+            } else if (ratio > 900 && ratio < 1100) {
+                factor = 1 / 1000;
+            }
+        } else if (duration > 0 && duration < 400 && progress <= duration) {
+            factor = 60;
+        }
+
+        const normalizedDuration = Math.max(0, Math.floor(duration * factor));
+        const normalizedProgress = Math.max(0, Math.floor(progress * factor));
+        const safeDuration = metadataDuration > 0
+            ? Math.max(normalizedDuration, metadataDuration)
+            : normalizedDuration;
+
+        return {
+            progress: Math.min(normalizedProgress, safeDuration || normalizedProgress),
+            duration: safeDuration
+        };
+    }
+
     createCard(item) {
-        const { data, progress, duration, item_id } = item;
+        const { data, item_id } = item;
         const type = item.item_type || item.type;
-        const percent = Math.min(100, Math.round((progress / duration) * 100));
 
         // Proxy the poster if it's an external URL
-        const poster = data.poster || '/img/LurkedTV.png';
+        const safeData = data || {};
+        const poster = safeData.poster || '/img/LurkedTV.png';
         const posterUrl = poster.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(poster)}` : poster;
 
         return `
-            <div class="dashboard-card" data-id="${item_id}" data-type="${type}">
+            <div class="dashboard-card" data-id="${item_id}" data-source-id="${item.source_id || safeData.sourceId || ''}" data-type="${type}">
                 <div class="card-image">
-                    <img src="${posterUrl}" alt="${data.title || item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" style="width: ${percent}%"></div>
-                    </div>
+                    <img src="${posterUrl}" alt="${safeData.title || item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
                     <div class="play-icon-overlay">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                     </div>
                 </div>
                 <div class="card-info">
-                    <div class="card-title" title="${item.name || data.title}">${item.name || data.title || 'Unknown Title'}</div>
-                    <div class="card-subtitle">${data.subtitle || (type === 'movie' ? 'Movie' : 'Series')}</div>
+                    <div class="card-title" title="${item.name || safeData.title}">${item.name || safeData.title || 'Unknown Title'}</div>
+                    <div class="card-subtitle">${safeData.subtitle || (type === 'movie' ? 'Movie' : 'Series')}</div>
                 </div>
             </div>
         `;
@@ -569,11 +723,13 @@ class HomePage {
         if (!this.app.pages.watch) return;
 
         try {
+            const data = item.data || {};
+            const normalized = this.normalizeHistoryTiming(item);
             const type = item.item_type || item.type;
             const streamType = type === 'movie' ? 'movie' : 'series';
-            const sourceId = item.source_id || (item.data && item.data.sourceId);
+            const sourceId = item.source_id || data.sourceId;
             const streamId = item.item_id;
-            const container = item.container_extension || (item.data && item.data.containerExtension) || 'mp4';
+            const container = item.container_extension || data.containerExtension || 'mp4';
 
             const result = await window.API.request('GET', `/proxy/xtream/${sourceId}/stream/${streamId}/${streamType}?container=${container}`);
 
@@ -581,20 +737,20 @@ class HomePage {
                 const content = {
                     id: item.item_id,
                     type: type,
-                    title: item.name || item.data.title,
-                    subtitle: item.data.subtitle || (type === 'movie' ? 'Movie' : 'Series'),
-                    poster: item.stream_icon || item.data.poster,
+                    title: item.name || data.title,
+                    subtitle: data.subtitle || (type === 'movie' ? 'Movie' : 'Series'),
+                    poster: item.stream_icon || data.poster,
                     sourceId: sourceId,
-                    resumeTime: isResume ? item.progress : 0,
-                    duration: item.duration || (item.data && item.data.duration) || 0,
+                    resumeTime: isResume ? normalized.progress : 0,
+                    duration: normalized.duration || data.duration || 0,
                     containerExtension: container
                 };
 
                 // For episodes, try to restore series data for next episode functionality
-                if (type === 'episode' && item.data) {
-                    content.seriesId = item.data.seriesId || null;
-                    content.currentSeason = item.data.currentSeason || null;
-                    content.currentEpisode = item.data.currentEpisode || null;
+                if (type === 'episode') {
+                    content.seriesId = data.seriesId || null;
+                    content.currentSeason = data.currentSeason || null;
+                    content.currentEpisode = data.currentEpisode || null;
 
                     // Fetch seriesInfo if we have a seriesId
                     if (content.seriesId && sourceId) {
