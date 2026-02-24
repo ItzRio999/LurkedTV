@@ -8,7 +8,12 @@ class HomePage {
         this.container = null; // Will be set in renderLayout
         this.isLoading = false;
         this.clockInterval = null;
-        this.use24HourClock = localStorage.getItem('homeClockUse24Hour') === 'true';
+        const storedClockPreference = localStorage.getItem('homeClockUse24Hour');
+        this.use24HourClock = storedClockPreference === 'true';
+        if (storedClockPreference === null) {
+            // Default new users to 12-hour format unless they explicitly switch.
+            localStorage.setItem('homeClockUse24Hour', 'false');
+        }
         this.clockTiltCleanup = null;
     }
 

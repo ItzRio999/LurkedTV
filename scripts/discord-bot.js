@@ -418,6 +418,18 @@ async function apiPost(path, token, payload) {
     return body;
 }
 
+async function apiPut(path, token, payload) {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+    });
+    let body = null;
+    try { body = await response.json(); } catch (_) { body = null; }
+    if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+    return body;
+}
+
 function getJwtExpiryMs(jwtToken) {
     try {
         const parts = String(jwtToken || '').split('.');
@@ -1023,6 +1035,11 @@ function buildHelpEmbed() {
                 inline: false,
             },
             {
+                name: `${EMOJI.gear} \`${prefix}makeadmin <user>\``,
+                value: `Promote a LurkedTV user to admin by username, user ID, or Discord mention.\nAliases: \`${prefix}addadmin\`, \`${prefix}promoteadmin\``,
+                inline: false,
+            },
+            {
                 name: `${EMOJI.ping} \`${prefix}ping\``,
                 value: `Check bot response latency.\nAliases: \`${prefix}latency\``,
                 inline: false,
@@ -1549,6 +1566,99 @@ async function handlePrefixCommand(message, rawNewPrefix) {
     });
 }
 
+function parseDiscordMentionUserId(value) {
+    const raw = sanitizeEmbedText(value, '');
+    const match = raw.match(/^<@!?(\d+)>$/);
+    return match ? match[1] : '';
+}
+
+async function handleMakeAdminCommand(message, rawTarget) {
+    const targetRaw = sanitizeEmbedText(rawTarget, '');
+    if (!targetRaw) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} Missing Target User`,
+                    description: `Usage: \`${prefix}makeadmin <username|userId|@discordUser>\``,
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const isDiscordAdmin = Boolean(
+        message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+        message.member?.permissions?.has(PermissionsBitField.Flags.ManageGuild)
+    );
+    if (!isDiscordAdmin) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.error} Permission Required`,
+                    description: 'You need **Administrator** or **Manage Server** permission to run this command.',
+                    color: COLORS.error,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const token = await getNodecastTokenForDiscordUser(message.author.id);
+    const users = await apiGet('/api/auth/users', token);
+    if (!Array.isArray(users) || users.length === 0) {
+        throw new Error('No users were returned by the API.');
+    }
+
+    const mentionId = parseDiscordMentionUserId(targetRaw);
+    const targetIdRaw = mentionId || targetRaw;
+    const targetLower = targetRaw.toLowerCase();
+
+    const targetUser = users.find((u) =>
+        String(u?.id || '') === targetIdRaw ||
+        String(u?.discordId || '') === targetIdRaw ||
+        String(u?.username || '').toLowerCase() === targetLower
+    );
+
+    if (!targetUser) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} User Not Found`,
+                    description: `Could not find user \`${targetRaw}\`. Try username, Nodecast user ID, or Discord mention.`,
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    if (String(targetUser.role || '').toLowerCase() === 'admin') {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.info} Already Admin`,
+                    description: `**${targetUser.username || `User ${targetUser.id}`}** already has admin role.`,
+                    color: COLORS.info,
+                }),
+            ],
+        });
+        return;
+    }
+
+    await apiPut(`/api/auth/users/${encodeURIComponent(String(targetUser.id))}`, token, { role: 'admin' });
+    await message.reply({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.success} Admin Role Granted`,
+                description: `Promoted **${targetUser.username || `User ${targetUser.id}`}** to admin.`,
+                color: COLORS.success,
+                footer: `Requested by ${message.author.username}`,
+            }),
+        ],
+    });
+}
+
 async function syncRuntimeConfigFromServer() {
     if (!NODECAST_DISCORD_AUTH_SECRET) return;
     try {
@@ -1623,6 +1733,7 @@ client.on('messageCreate', async (message) => {
         'mwreset', 'resetmw', 'mwclear',
         'clear',
         'prefix', 'setprefix',
+        'makeadmin', 'addadmin', 'promoteadmin',
         'ping', 'latency',
         'help', 'commands', 'cmds',
         '',
@@ -1645,6 +1756,10 @@ client.on('messageCreate', async (message) => {
         if (command === 'mwreset' || command === 'resetmw' || command === 'mwclear') { await handleMustWatchResetCommand(message); return; }
         if (command === 'clear') { await handleClearCommand(message, args[0]); return; }
         if (command === 'prefix' || command === 'setprefix') { await handlePrefixCommand(message, args[0]); return; }
+        if (command === 'makeadmin' || command === 'addadmin' || command === 'promoteadmin') {
+            await handleMakeAdminCommand(message, args.join(' '));
+            return;
+        }
 
         if (command === 'ping' || command === 'latency') {
             const latency = Date.now() - message.createdTimestamp;

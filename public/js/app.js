@@ -8,6 +8,9 @@ class App {
         this.pages = {};
         this.currentUser = null;
         this.device = this.detectDeviceCapabilities();
+        this.globalLoadingEl = document.getElementById('app-global-loading');
+        this.globalLoadingTextEl = document.getElementById('app-global-loading-text');
+        this.globalLoadingCount = 0;
 
         // Initialize components
         this.player = new VideoPlayer();
@@ -351,21 +354,17 @@ class App {
     }
 
     initProfileDropdown() {
-        const user = this.currentUser;
         const profileEl = document.getElementById('navbar-profile');
         const profileBtn = document.getElementById('profile-btn');
         const dropdown = document.getElementById('profile-dropdown');
-        const displayName = document.getElementById('profile-display-name');
-        const displayEmail = document.getElementById('profile-display-email');
         const settingsBtn = document.getElementById('profile-settings-btn');
         const logoutBtn = document.getElementById('profile-logout-btn');
         const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
 
         if (!profileEl || !profileBtn || !dropdown) return;
 
-        // Populate user info
-        if (displayName) displayName.textContent = user?.username || user?.email || 'User';
-        if (displayEmail) displayEmail.textContent = user?.email || '';
+        // Populate user info/avatar
+        this.updateNavbarProfileVisuals();
 
         const openDropdown = () => {
             profileEl.classList.add('open');
@@ -438,6 +437,44 @@ class App {
         }
     }
 
+    updateNavbarProfileVisuals(user = this.currentUser) {
+        const displayName = document.getElementById('profile-display-name');
+        const displayEmail = document.getElementById('profile-display-email');
+        const profileBtn = document.getElementById('profile-btn');
+        const avatarEl = document.getElementById('profile-avatar');
+        if (!profileBtn) return;
+
+        if (displayName) displayName.textContent = user?.username || user?.email || 'User';
+        if (displayEmail) displayEmail.textContent = user?.email || '';
+
+        const avatarUrl = (user?.discordLinked && typeof user?.discordAvatarUrl === 'string')
+            ? user.discordAvatarUrl.trim()
+            : '';
+
+        profileBtn.classList.remove('profile-btn--has-avatar');
+        if (!avatarEl) return;
+
+        avatarEl.classList.add('hidden');
+        avatarEl.removeAttribute('src');
+        avatarEl.onload = null;
+        avatarEl.onerror = null;
+
+        if (!avatarUrl) return;
+
+        avatarEl.onload = () => {
+            avatarEl.classList.remove('hidden');
+            profileBtn.classList.add('profile-btn--has-avatar');
+        };
+
+        avatarEl.onerror = () => {
+            avatarEl.classList.add('hidden');
+            avatarEl.removeAttribute('src');
+            profileBtn.classList.remove('profile-btn--has-avatar');
+        };
+
+        avatarEl.src = avatarUrl;
+    }
+
     setupGlobalSearch() {
         if (!this.pages.search) return;
 
@@ -463,7 +500,46 @@ class App {
         });
     }
 
-    navigateTo(pageName, replaceHistory = false) {
+    setGlobalLoading(isLoading, message = 'Loading...') {
+        if (!this.globalLoadingEl) return;
+
+        if (isLoading) {
+            this.globalLoadingCount += 1;
+            if (this.globalLoadingTextEl) this.globalLoadingTextEl.textContent = message;
+            this.globalLoadingEl.classList.remove('hidden');
+            return;
+        }
+
+        this.globalLoadingCount = Math.max(0, this.globalLoadingCount - 1);
+        if (this.globalLoadingCount === 0) {
+            this.globalLoadingEl.classList.add('hidden');
+        }
+    }
+
+    async withGlobalLoading(task, message = 'Loading...') {
+        this.setGlobalLoading(true, message);
+        try {
+            return await task();
+        } finally {
+            this.setGlobalLoading(false);
+        }
+    }
+
+    getPageLoadingMessage(pageName, requestedGuide = false) {
+        if (requestedGuide) return 'Loading guide...';
+        const labels = {
+            home: 'Loading dashboard...',
+            live: 'Loading live TV...',
+            movies: 'Loading movies...',
+            series: 'Loading series...',
+            search: 'Searching...',
+            settings: 'Loading settings...',
+            watch: 'Loading player...'
+        };
+        return labels[pageName] || 'Loading...';
+    }
+
+    async navigateTo(pageName, replaceHistory = false) {
         const requestedGuide = pageName === 'guide';
         if (requestedGuide) {
             pageName = 'live';
@@ -482,42 +558,43 @@ class App {
             }
             return;
         }
+        await this.withGlobalLoading(async () => {
+            // Update browser history
+            if (replaceHistory) {
+                // Replace current history entry (used on initial load)
+                history.replaceState({ page: pageName }, '', `#${pageName}`);
+            } else {
+                // Add new history entry
+                history.pushState({ page: pageName }, '', `#${pageName}`);
+            }
 
-        // Update browser history
-        if (replaceHistory) {
-            // Replace current history entry (used on initial load)
-            history.replaceState({ page: pageName }, '', `#${pageName}`);
-        } else {
-            // Add new history entry
-            history.pushState({ page: pageName }, '', `#${pageName}`);
-        }
+            // Update nav
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.toggle('active', link.dataset.page === pageName);
+            });
 
-        // Update nav
-        document.querySelectorAll('.nav-link').forEach(link => {
-            link.classList.toggle('active', link.dataset.page === pageName);
-        });
+            // Update pages
+            document.querySelectorAll('.page').forEach(page => {
+                page.classList.toggle('active', page.id === `page-${pageName}`);
+            });
 
-        // Update pages
-        document.querySelectorAll('.page').forEach(page => {
-            page.classList.toggle('active', page.id === `page-${pageName}`);
-        });
+            // Notify page controllers
+            if (this.pages[this.currentPage]?.hide) {
+                await this.pages[this.currentPage].hide();
+            }
 
-        // Notify page controllers
-        if (this.pages[this.currentPage]?.hide) {
-            this.pages[this.currentPage].hide();
-        }
+            this.currentPage = pageName;
 
-        this.currentPage = pageName;
+            if (this.pages[pageName]?.show) {
+                await this.pages[pageName].show();
+            }
 
-        if (this.pages[pageName]?.show) {
-            this.pages[pageName].show();
-        }
-
-        if (requestedGuide) {
-            const liveToggle = document.getElementById('live-epg-toggle');
-            if (liveToggle) liveToggle.checked = true;
-            this.pages.live?.setEpgMode?.(true);
-        }
+            if (requestedGuide) {
+                const liveToggle = document.getElementById('live-epg-toggle');
+                if (liveToggle) liveToggle.checked = true;
+                await this.pages.live?.setEpgMode?.(true);
+            }
+        }, this.getPageLoadingMessage(pageName, requestedGuide));
     }
 }
 

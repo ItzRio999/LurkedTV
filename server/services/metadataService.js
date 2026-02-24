@@ -233,7 +233,7 @@ function buildSmartScore(type, item, tmdb, omdb) {
         ratingPercent,
         votes: votesCombined,
         year,
-        ratingSources,
+        ratingSources: sourceRatings,
         providers: {
             local: localRating10 > 0 || localVotes > 0,
             tmdb: !!tmdb,

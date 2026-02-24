@@ -218,6 +218,7 @@ class SettingsPage {
                 const value = languageSelect.value || '';
                 const updatedUser = await API.account.updatePreferences({ defaultLanguage: value });
                 this.app.currentUser = updatedUser;
+                this.app.updateNavbarProfileVisuals?.(updatedUser);
                 this.applyDefaultLanguagePreference(updatedUser.defaultLanguage || '');
             } catch (err) {
                 alert(`Failed to save default language: ${err.message}`);
@@ -245,6 +246,7 @@ class SettingsPage {
             try {
                 const updatedUser = await API.account.changeUsername({ username: requested });
                 this.app.currentUser = updatedUser;
+                this.app.updateNavbarProfileVisuals?.(updatedUser);
                 if (usernameInput) usernameInput.value = updatedUser.username || '';
 
                 const usernameEl = document.getElementById('account-username');
@@ -346,6 +348,7 @@ class SettingsPage {
         try {
             const user = await API.account.getMe();
             this.app.currentUser = user;
+            this.app.updateNavbarProfileVisuals?.(user);
 
             if (usernameEl) {
                 usernameEl.textContent = user.username || '-';
@@ -1032,12 +1035,18 @@ async loadHardwareInfo() {
 
         // Load content browser when switching to that tab
         if (tabName === 'content') {
-            this.app.sourceManager.loadContentSources();
+            this.app.withGlobalLoading(
+                () => this.app.sourceManager.loadContentSources(),
+                'Loading content...'
+            );
         }
 
         // Load users when switching to users tab
         if (tabName === 'users') {
-            this.loadUsers();
+            this.app.withGlobalLoading(
+                () => this.loadUsers(),
+                'Loading users...'
+            );
             this.startDiscordBotStatusPolling();
         } else {
             this.stopDiscordBotStatusPolling();
@@ -1045,7 +1054,10 @@ async loadHardwareInfo() {
 
         // Load hardware info when switching to transcode tab
         if (tabName === 'transcode') {
-            this.loadHardwareInfo();
+            this.app.withGlobalLoading(
+                () => this.loadHardwareInfo(),
+                'Loading hardware info...'
+            );
         }
     }
 
@@ -1103,7 +1115,10 @@ async loadHardwareInfo() {
 
         if (document.getElementById('tab-users')?.classList.contains('active')) {
             this.startDiscordBotStatusPolling();
-            this.loadUsers();
+            this.app.withGlobalLoading(
+                () => this.loadUsers(),
+                'Loading users...'
+            );
         }
     }
 

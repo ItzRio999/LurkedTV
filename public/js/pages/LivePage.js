@@ -7,6 +7,8 @@ class LivePage {
         this.app = app;
         this.liveLayout = document.querySelector('#page-live .home-layout');
         this.liveEpgPanel = document.getElementById('live-epg-panel');
+        this.liveEpgLoading = document.getElementById('live-epg-loading');
+        this.liveEpgLoadingText = document.getElementById('live-epg-loading-text');
         this.epgToggle = document.getElementById('live-epg-toggle');
         this.guideBackBtn = document.getElementById('guide-back');
         this._epgViewActive = false;
@@ -130,18 +132,22 @@ class LivePage {
 
     async setEpgMode(enabled) {
         if (this._epgViewActive === enabled) return;
-        this._epgViewActive = enabled;
+        this.setEpgTransitionLoading(true, enabled ? 'Loading guide...' : 'Switching to live...');
+        try {
+            // Let loading UI paint before expensive EPG work starts.
+            await this.waitForNextPaint();
 
-        this.liveLayout?.classList.toggle('hidden', enabled);
-        this.liveEpgPanel?.classList.toggle('hidden', !enabled);
+            this._epgViewActive = enabled;
+            this.liveLayout?.classList.toggle('hidden', enabled);
+            this.liveEpgPanel?.classList.toggle('hidden', !enabled);
 
-        if (enabled) {
-            document.getElementById('channel-sidebar')?.classList.remove('active');
-            document.getElementById('channel-sidebar-overlay')?.classList.remove('active');
-        }
-
-        if (enabled) {
-            await this.showEpgView();
+            if (enabled) {
+                document.getElementById('channel-sidebar')?.classList.remove('active');
+                document.getElementById('channel-sidebar-overlay')?.classList.remove('active');
+                await this.showEpgView();
+            }
+        } finally {
+            this.setEpgTransitionLoading(false);
         }
     }
 
@@ -157,6 +163,17 @@ class LivePage {
         } else {
             this.app.epgGuide.render();
         }
+    }
+
+    setEpgTransitionLoading(isLoading, message = 'Loading guide...') {
+        if (this.liveEpgLoadingText) this.liveEpgLoadingText.textContent = message;
+        this.liveEpgLoading?.classList.toggle('hidden', !isLoading);
+        if (this.epgToggle) this.epgToggle.disabled = isLoading;
+        if (this.guideBackBtn) this.guideBackBtn.disabled = isLoading;
+    }
+
+    waitForNextPaint() {
+        return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
 }
 
