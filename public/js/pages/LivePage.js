@@ -8,11 +8,14 @@ class LivePage {
         this.liveLayout = document.querySelector('#page-live .home-layout');
         this.liveEpgPanel = document.getElementById('live-epg-panel');
         this.epgToggle = document.getElementById('live-epg-toggle');
+        this.guideBackBtn = document.getElementById('guide-back');
         this._epgViewActive = false;
         this.handleKeydown = this.handleKeydown.bind(this);
         this.handleEpgToggle = this.handleEpgToggle.bind(this);
+        this.handleGuideBack = this.handleGuideBack.bind(this);
 
         this.epgToggle?.addEventListener('change', this.handleEpgToggle);
+        this.guideBackBtn?.addEventListener('click', this.handleGuideBack);
     }
 
     async init() {
@@ -117,6 +120,12 @@ class LivePage {
 
     async handleEpgToggle() {
         await this.setEpgMode(Boolean(this.epgToggle?.checked));
+    }
+
+    async handleGuideBack() {
+        if (!this.epgToggle) return;
+        this.epgToggle.checked = false;
+        await this.setEpgMode(false);
     }
 
     async setEpgMode(enabled) {
