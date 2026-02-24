@@ -117,6 +117,14 @@ class App {
             });
         });
 
+        const navbarBrand = document.getElementById('navbar-brand');
+        if (navbarBrand) {
+            navbarBrand.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.navigateTo('home');
+            });
+        }
+
         this.setupGlobalSearch();
 
         // Toggle groups button

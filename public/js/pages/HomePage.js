@@ -9,6 +9,7 @@ class HomePage {
         this.isLoading = false;
         this.clockInterval = null;
         this.use24HourClock = localStorage.getItem('homeClockUse24Hour') === 'true';
+        this.clockTiltCleanup = null;
     }
 
     async init() {
@@ -27,6 +28,7 @@ class HomePage {
     hide() {
         // Cleanup if needed
         this.stopWelcomeClock();
+        this.teardownClockTilt();
         if (this.container) {
             this.container.innerHTML = '';
         }
@@ -58,12 +60,15 @@ class HomePage {
                             </div>
                         </div>
                     </div>
-                    <div class="dashboard-clock" aria-live="polite">
-                        <div class="dashboard-clock-time" id="home-clock-time">--:--:--</div>
-                        <div class="dashboard-clock-date" id="home-clock-date">Loading date...</div>
-                        <button type="button" class="dashboard-clock-toggle" id="home-clock-toggle">
-                            24-hour
-                        </button>
+                    <div class="dashboard-clock idle" data-home-clock-tilt aria-live="polite">
+                        <div class="dashboard-clock-glare" aria-hidden="true"></div>
+                        <div class="dashboard-clock-inner">
+                            <div class="dashboard-clock-time" id="home-clock-time" data-clock-layer="12">--:--:--</div>
+                            <div class="dashboard-clock-date" id="home-clock-date" data-clock-layer="8">Loading date...</div>
+                            <button type="button" class="dashboard-clock-toggle" id="home-clock-toggle" data-clock-layer="5">
+                                24-hour
+                            </button>
+                        </div>
                     </div>
                 </section>
 
@@ -154,6 +159,272 @@ class HomePage {
         // Attach scroll arrow handlers
         this.initScrollArrows();
         this.bindContinueWatchingActions();
+        this.initClockTilt();
+    }
+
+    initClockTilt() {
+        this.teardownClockTilt();
+
+        const clockCard = document.querySelector('[data-home-clock-tilt]');
+        if (!clockCard) return;
+
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (prefersReducedMotion) return;
+
+        const glare  = clockCard.querySelector('.dashboard-clock-glare');
+        const layers = Array.from(clockCard.querySelectorAll('[data-clock-layer]'));
+
+        const MAX_TILT      = 14;
+        const SCALE_ACTIVE  = 1.04;
+        const SCALE_IDLE    = 1;
+        const SHADOW_DEPTH  = 28;
+        const LAYER_FACTOR  = 0.55;  // how strongly inner layers parallax
+        const GLARE_RANGE   = 22;    // % glare travel
+        const TRANS_FAST    = `perspective(950px) rotateX(0deg) rotateY(0deg) scale(${SCALE_IDLE})`;
+        const SPRING_BACK   = 'transform 0.65s cubic-bezier(0.23, 1, 0.32, 1), box-shadow 0.65s cubic-bezier(0.23, 1, 0.32, 1)';
+        const TRACKING      = 'transform 0.08s ease-out, box-shadow 0.08s ease-out';
+
+        let rect    = null;
+        let active  = false;
+        let pointerX = 0;
+        let pointerY = 0;
+        let rafId   = 0;
+        let idleRafId = 0;
+        let idleStartTime = null;
+
+        const clamp = (v, mn, mx) => Math.min(Math.max(v, mn), mx);
+        const setRect = () => { rect = clockCard.getBoundingClientRect(); };
+
+        // ── Idle float animation (runs when not hovered) ──
+        const animateIdle = (timestamp) => {
+            if (active) {
+                idleRafId = 0;
+                idleStartTime = null;
+                return;
+            }
+            if (!idleStartTime) idleStartTime = timestamp;
+            const elapsed = (timestamp - idleStartTime) / 1000; // seconds
+
+            // Gentle Lissajous-style float: different frequencies on each axis
+            const rotX = Math.sin(elapsed * 0.55) * 2.5;
+            const rotY = Math.sin(elapsed * 0.35 + 1.0) * 3.5;
+            const translateY = Math.sin(elapsed * 0.45) * 5; // px bob
+
+            clockCard.style.transform = `perspective(950px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateY(${translateY}px) scale(${SCALE_IDLE})`;
+
+            // Subtle glare drift during idle
+            if (glare) {
+                const gx = Math.sin(elapsed * 0.3) * 8;
+                const gy = Math.sin(elapsed * 0.25 + 0.5) * 8;
+                glare.style.transform = `translate(calc(-50% + ${gx}%), calc(-50% + ${gy}%))`;
+                glare.style.opacity = '0.25';
+            }
+
+            // Move layers very slightly
+            const nx = Math.sin(elapsed * 0.35 + 1.0);
+            const ny = Math.sin(elapsed * 0.55);
+            for (const layer of layers) {
+                const depth = Number(layer.dataset.clockLayer) || 0;
+                const tx = nx * -depth * LAYER_FACTOR * 0.4;
+                const ty = ny * -depth * LAYER_FACTOR * 0.4;
+                layer.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+            }
+
+            idleRafId = requestAnimationFrame(animateIdle);
+        };
+
+        const startIdleAnimation = () => {
+            if (idleRafId) return;
+            idleStartTime = null;
+            idleRafId = requestAnimationFrame(animateIdle);
+        };
+
+        const stopIdleAnimation = () => {
+            if (idleRafId) {
+                cancelAnimationFrame(idleRafId);
+                idleRafId = 0;
+                idleStartTime = null;
+            }
+        };
+
+        // ── Mouse-tracking tilt render ──
+        const render = () => {
+            rafId = 0;
+            if (!active || !rect) return;
+
+            const px = clamp((pointerX - rect.left) / rect.width,  0, 1);
+            const py = clamp((pointerY - rect.top)  / rect.height, 0, 1);
+            const nx = px * 2 - 1;  // -1 … +1
+            const ny = py * 2 - 1;  // -1 … +1
+
+            const rotX = -ny * MAX_TILT;
+            const rotY =  nx * MAX_TILT;
+
+            clockCard.style.transform = `perspective(950px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale(${SCALE_ACTIVE})`;
+
+            // Shadow moves opposite to tilt direction for depth
+            const shadowX = rotY * 1.3;
+            const shadowY = -rotX * 1.3;
+            clockCard.style.boxShadow = `${shadowX}px ${shadowY}px ${SHADOW_DEPTH}px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06)`;
+
+            // Parallax layers — each element floats at its own depth
+            for (const layer of layers) {
+                const depth = Number(layer.dataset.clockLayer) || 0;
+                const tx = nx * -depth * LAYER_FACTOR;
+                const ty = ny * -depth * LAYER_FACTOR;
+                layer.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+            }
+
+            // Glare follows cursor within the card
+            if (glare) {
+                const gx = nx * GLARE_RANGE;
+                const gy = ny * GLARE_RANGE;
+                glare.style.transform = `translate(calc(-50% + ${gx}%), calc(-50% + ${gy}%))`;
+                glare.style.opacity = '0.6';
+            }
+        };
+
+        const scheduleRender = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(render);
+        };
+
+        // ── Reset all transforms (called on leave) ──
+        const resetTransforms = () => {
+            // Apply spring-back transition before resetting
+            clockCard.style.transition = SPRING_BACK;
+            clockCard.style.transform  = TRANS_FAST;
+            clockCard.style.boxShadow  = '';
+
+            if (glare) {
+                glare.style.opacity   = '';
+                glare.style.transform = 'translate(calc(-50% + 0%), calc(-50% + 0%))';
+            }
+
+            for (const layer of layers) {
+                layer.style.transform = '';
+            }
+
+            // After the spring-back finishes, restore fast tracking transition and start idle
+            setTimeout(() => {
+                if (!active) {
+                    clockCard.style.transition = '';
+                    startIdleAnimation();
+                }
+            }, 680);
+        };
+
+        // ── Event handlers ──
+        const onEnter = (event) => {
+            setRect();
+            stopIdleAnimation();
+            active   = true;
+            pointerX = event.clientX;
+            pointerY = event.clientY;
+            clockCard.classList.add('active');
+            clockCard.classList.remove('idle');
+            clockCard.style.transition = TRACKING;
+            scheduleRender();
+        };
+
+        const onMove = (event) => {
+            if (!rect) setRect();
+            pointerX = event.clientX;
+            pointerY = event.clientY;
+            if (!active) {
+                stopIdleAnimation();
+                active = true;
+                clockCard.classList.add('active');
+                clockCard.classList.remove('idle');
+                clockCard.style.transition = TRACKING;
+            }
+            scheduleRender();
+        };
+
+        const onLeave = () => {
+            active = false;
+            clockCard.classList.remove('active');
+            clockCard.classList.add('idle');
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = 0;
+            }
+            resetTransforms();
+        };
+
+        // Document-level move so tilt stays live even when cursor slides off fast
+        const onDocumentMove = (event) => {
+            if (!rect) setRect();
+            if (!rect) return;
+
+            const inside =
+                event.clientX >= rect.left &&
+                event.clientX <= rect.right &&
+                event.clientY >= rect.top  &&
+                event.clientY <= rect.bottom;
+
+            if (!inside) {
+                if (active) onLeave();
+                return;
+            }
+            onMove(event);
+        };
+
+        const onWindowChange = () => {
+            setRect();
+        };
+
+        // Attach listeners
+        clockCard.addEventListener('pointerenter', onEnter);
+        clockCard.addEventListener('pointermove',  onMove);
+        clockCard.addEventListener('pointerleave', onLeave);
+        clockCard.addEventListener('mouseenter',   onEnter);
+        clockCard.addEventListener('mousemove',    onMove);
+        clockCard.addEventListener('mouseleave',   onLeave);
+        document.addEventListener('pointermove',   onDocumentMove, { passive: true });
+        document.addEventListener('mousemove',     onDocumentMove, { passive: true });
+        window.addEventListener('resize',          onWindowChange);
+        window.addEventListener('scroll',          onWindowChange, true);
+
+        // Kick off idle float immediately
+        clockCard.classList.add('idle');
+        startIdleAnimation();
+
+        // ── Cleanup ──
+        this.clockTiltCleanup = () => {
+            stopIdleAnimation();
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = 0;
+            }
+            clockCard.removeEventListener('pointerenter', onEnter);
+            clockCard.removeEventListener('pointermove',  onMove);
+            clockCard.removeEventListener('pointerleave', onLeave);
+            clockCard.removeEventListener('mouseenter',   onEnter);
+            clockCard.removeEventListener('mousemove',    onMove);
+            clockCard.removeEventListener('mouseleave',   onLeave);
+            document.removeEventListener('pointermove',   onDocumentMove);
+            document.removeEventListener('mousemove',     onDocumentMove);
+            window.removeEventListener('resize',          onWindowChange);
+            window.removeEventListener('scroll',          onWindowChange, true);
+            clockCard.classList.remove('active', 'idle');
+            clockCard.style.transition = '';
+            clockCard.style.transform  = '';
+            clockCard.style.boxShadow  = '';
+            if (glare) {
+                glare.style.transform = '';
+                glare.style.opacity   = '';
+            }
+            for (const layer of layers) {
+                layer.style.transform = '';
+            }
+        };
+    }
+
+    teardownClockTilt() {
+        if (!this.clockTiltCleanup) return;
+        this.clockTiltCleanup();
+        this.clockTiltCleanup = null;
     }
 
     bindContinueWatchingActions() {
@@ -923,4 +1194,3 @@ class HomePage {
 }
 
 window.HomePage = HomePage;
-

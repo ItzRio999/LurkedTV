@@ -196,6 +196,7 @@ h4 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   height: var(--navbar-height);
   padding: 0 var(--space-md);
   padding-left: max(var(--space-md), var(--safe-area-inset-left));
@@ -210,7 +211,23 @@ h4 {
 .navbar-brand {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  position: relative;
+  z-index: 2;
+}
+
+.navbar-brand:focus-visible {
+  outline: 2px solid rgba(124, 58, 237, 0.7);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .logo {
@@ -226,7 +243,7 @@ h4 {
 
 .logo img {
   display: block;
-  height: 28px;
+  height: 107px;
   width: auto;
   object-fit: contain;
   filter: drop-shadow(0 0 6px rgba(124, 58, 237, 0.2));
@@ -238,8 +255,7 @@ h4 {
   font-weight: 500;
   letter-spacing: -0.03em;
   color: #fff;
-  /* Visual correction: shift text slightly down to align optically with icon center */
-  padding-top: 2px;
+  line-height: 1;
 }
 
 .brand-accent {
@@ -247,23 +263,30 @@ h4 {
 }
 
 .version-badge {
-  font-size: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
   font-weight: 600;
   background: var(--color-accent);
   color: #fff;
-  padding: 1px 6px;
-  border-radius: 10px;
-  margin-left: 8px;
-  vertical-align: middle;
+  padding: 4px 12px;
+  border-radius: 14px;
+  margin-left: -28px;
+  margin-top: -4px;
+  line-height: 1;
 }
 
 /* Centered nav links (desktop/tablet) */
 .navbar-center {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 2px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 /* Right section: search + profile + hamburger */
@@ -272,7 +295,11 @@ h4 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: 18px;
+  margin-left: auto;
+  margin-right: 18px;
+  min-width: 0;
+  position: relative;
+  z-index: 2;
 }
 
 /* Mobile dropdown — hidden by default, shown on mobile via media query */
@@ -2454,6 +2481,10 @@ kbd {
     font-size: 1.25rem;
   }
 
+  .logo img {
+    height: 93px;
+  }
+
   /* Home Layout - Full screen video with drawer */
   .home-layout {
     flex-direction: row;
@@ -2687,8 +2718,16 @@ kbd {
     height: 50px;
   }
 
+  .navbar-right {
+    margin-right: 0;
+  }
+
   .logo {
     font-size: 1.3rem;
+  }
+
+  .logo img {
+    height: 77px;
   }
 
   .brand-text {
@@ -5638,6 +5677,16 @@ kbd {
   .dashboard-welcome-subtitle {
     animation: none;
   }
+
+  .dashboard-clock.idle {
+    animation: none;
+  }
+
+  .dashboard-clock,
+  .dashboard-clock [data-clock-layer],
+  .dashboard-clock-glare {
+    transition: none;
+  }
 }
 
 .dashboard-clock {
@@ -5645,14 +5694,91 @@ kbd {
   min-width: 320px;
   padding: 18px 20px;
   border-radius: 16px;
-  border: 1px solid rgba(124, 58, 237, 0.22);
+  border: 1px solid rgba(124, 58, 237, 0.45);
   background:
-    radial-gradient(90% 120% at 100% 0%, rgba(var(--color-accent-rgb), 0.16) 0%, transparent 60%),
-    rgba(0, 0, 0, 0.42);
+    linear-gradient(135deg, rgba(20, 20, 20, 0.72), rgba(10, 10, 10, 0.58));
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   text-align: right;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.04);
+  position: relative;
+  overflow: hidden;
+  transform-style: preserve-3d;
+  will-change: transform;
+  transition: transform 0.08s ease-out, box-shadow 0.08s ease-out;
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+@keyframes dashboard-clock-float {
+  0%, 100% {
+    transform: rotateX(0deg) rotateY(0deg) translateY(0);
+  }
+  50% {
+    transform: rotateX(1.4deg) rotateY(-1.4deg) translateY(-4px);
+  }
+}
+
+.dashboard-clock.idle {
+  animation: dashboard-clock-float 6s ease-in-out infinite;
+}
+
+.dashboard-clock.active {
+  animation: none;
+}
+
+.dashboard-clock-glare {
+  position: absolute;
+  inset: -65%;
+  width: 230%;
+  height: 230%;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 62%);
+  transform: translate(calc(-50% + 0%), calc(-50% + 0%));
+  transition: opacity 0.18s ease-out;
+}
+
+.dashboard-clock.active .dashboard-clock-glare {
+  opacity: 1;
+}
+
+.dashboard-clock-deco {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.dashboard-clock-deco-1 {
+  width: 170px;
+  height: 170px;
+  top: -70px;
+  right: -45px;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.16), rgba(124, 58, 237, 0));
+}
+
+.dashboard-clock-deco-2 {
+  width: 128px;
+  height: 128px;
+  bottom: -54px;
+  left: -34px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+}
+
+.dashboard-clock-inner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.dashboard-clock [data-clock-layer] {
+  transition: transform 0.08s ease-out;
+  will-change: transform;
 }
 
 .dashboard-clock-time {
@@ -5676,27 +5802,25 @@ kbd {
   margin-top: 14px;
   padding: 7px 13px;
   border-radius: 999px;
-  border: 1px solid rgba(124, 58, 237, 0.4);
-  background: rgba(124, 58, 237, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.9);
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition: none;
 }
 
 .dashboard-clock-toggle:hover {
-  background: rgba(124, 58, 237, 0.22);
-  border-color: rgba(124, 58, 237, 0.6);
-  box-shadow: 0 0 10px rgba(124, 58, 237, 0.18);
-  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
   color: #fff;
 }
 
 .dashboard-clock-toggle:active {
-  transform: translateY(0);
+  transform: none;
 }
 
 .dashboard-section {
@@ -5935,6 +6059,10 @@ kbd {
     min-width: 0;
     text-align: left;
     width: 100%;
+  }
+
+  .dashboard-clock-inner {
+    align-items: flex-start;
   }
 
   .dashboard-clock-time {
