@@ -609,6 +609,61 @@ class SettingsPage {
         const customUaContainer = document.getElementById('custom-user-agent-container-tc');
         const autoOptimizeBtn = document.getElementById('auto-optimize-btn');
         const autoOptimizeFeedback = document.getElementById('auto-optimize-feedback');
+        const transcodePresetButtons = document.querySelectorAll('[data-transcode-preset]');
+        const isPremiumUser = () => this.app?.currentUser?.premium === true;
+        const normalizeUpscaleMethod = (value) => {
+            const normalized = String(value || '').toLowerCase();
+            return normalized === 'software' ? 'software' : 'hardware';
+        };
+        const transcodingPresets = {
+            performance: {
+                label: 'Performance',
+                values: {
+                    hwEncoder: 'auto',
+                    maxResolution: '720p',
+                    quality: 'low',
+                    audioMixPreset: 'auto',
+                    autoTranscode: true,
+                    forceTranscode: false,
+                    forceVideoTranscode: false,
+                    forceRemux: false,
+                    upscaleEnabled: false,
+                    streamFormat: 'm3u8'
+                }
+            },
+            balanced: {
+                label: 'Balanced',
+                values: {
+                    hwEncoder: 'auto',
+                    maxResolution: '1080p',
+                    quality: 'medium',
+                    audioMixPreset: 'auto',
+                    autoTranscode: true,
+                    forceTranscode: false,
+                    forceVideoTranscode: false,
+                    forceRemux: false,
+                    upscaleEnabled: false,
+                    streamFormat: 'm3u8'
+                }
+            },
+            quality: {
+                label: 'Quality',
+                values: {
+                    hwEncoder: 'auto',
+                    maxResolution: '4k',
+                    quality: 'high',
+                    audioMixPreset: 'itu',
+                    autoTranscode: true,
+                    forceTranscode: false,
+                    forceVideoTranscode: false,
+                    forceRemux: false,
+                    upscaleEnabled: true,
+                    upscaleMethod: 'hardware',
+                    upscaleTarget: '1080p',
+                    streamFormat: 'm3u8'
+                }
+            }
+        };
 
         // Fetch settings directly from API to avoid race condition with VideoPlayer
         let s;
@@ -633,6 +688,12 @@ class SettingsPage {
         if (userAgentCustomInput) userAgentCustomInput.value = s.userAgentCustom || '';
         if (customUaContainer) {
             customUaContainer.style.display = userAgentSelect?.value === 'custom' ? 'flex' : 'none';
+        }
+        if (autoOptimizeBtn) {
+            autoOptimizeBtn.title = isPremiumUser()
+                ? 'Auto-detect and apply the best profile for this system'
+                : 'Premium required';
+            autoOptimizeBtn.setAttribute('aria-disabled', isPremiumUser() ? 'false' : 'true');
         }
 
         // Event listeners for encoder settings
@@ -672,14 +733,63 @@ class SettingsPage {
             if (upscaleMethodContainer) upscaleMethodContainer.style.display = enabled ? 'flex' : 'none';
             if (upscaleTargetContainer) upscaleTargetContainer.style.display = enabled ? 'flex' : 'none';
         };
+        const applyTranscodingProfile = (profileSettings) => {
+            if (!profileSettings) return;
+            const mergedSettings = { ...this.app.player.settings, ...profileSettings };
+            mergedSettings.upscaleMethod = normalizeUpscaleMethod(mergedSettings.upscaleMethod);
+            this.app.player.settings = mergedSettings;
+
+            if (hwEncoderSelect && profileSettings.hwEncoder !== undefined) hwEncoderSelect.value = profileSettings.hwEncoder;
+            if (maxResolutionSelect && profileSettings.maxResolution !== undefined) maxResolutionSelect.value = profileSettings.maxResolution;
+            if (qualitySelect && profileSettings.quality !== undefined) qualitySelect.value = profileSettings.quality;
+            if (audioMixSelect && profileSettings.audioMixPreset !== undefined) audioMixSelect.value = profileSettings.audioMixPreset;
+            if (forceProxyToggle && profileSettings.forceProxy !== undefined) forceProxyToggle.checked = profileSettings.forceProxy === true;
+            if (hagsEnabledToggle && profileSettings.hagsEnabled !== undefined) hagsEnabledToggle.checked = profileSettings.hagsEnabled === true;
+            if (autoTranscodeToggle && profileSettings.autoTranscode !== undefined) autoTranscodeToggle.checked = profileSettings.autoTranscode === true;
+            if (forceTranscodeToggle && profileSettings.forceTranscode !== undefined) forceTranscodeToggle.checked = profileSettings.forceTranscode === true;
+            if (forceVideoTranscodeToggle && profileSettings.forceVideoTranscode !== undefined) forceVideoTranscodeToggle.checked = profileSettings.forceVideoTranscode === true;
+            if (forceRemuxToggle && profileSettings.forceRemux !== undefined) forceRemuxToggle.checked = profileSettings.forceRemux === true;
+            if (streamFormatSelect && profileSettings.streamFormat !== undefined) streamFormatSelect.value = profileSettings.streamFormat;
+            if (upscaleEnabledToggle && profileSettings.upscaleEnabled !== undefined) upscaleEnabledToggle.checked = profileSettings.upscaleEnabled === true;
+            if (upscaleMethodSelect && profileSettings.upscaleMethod !== undefined) {
+                upscaleMethodSelect.value = normalizeUpscaleMethod(profileSettings.upscaleMethod);
+            }
+            if (upscaleTargetSelect && profileSettings.upscaleTarget !== undefined) upscaleTargetSelect.value = profileSettings.upscaleTarget;
+            toggleUpscaleOptions(!!this.app.player.settings.upscaleEnabled);
+        };
 
         // Load upscaling settings
         if (upscaleEnabledToggle) {
             upscaleEnabledToggle.checked = s.upscaleEnabled || false;
             toggleUpscaleOptions(upscaleEnabledToggle.checked);
         }
-        if (upscaleMethodSelect) upscaleMethodSelect.value = s.upscaleMethod || 'hardware';
+        if (upscaleMethodSelect) {
+            const safeUpscaleMethod = normalizeUpscaleMethod(s.upscaleMethod || 'hardware');
+            upscaleMethodSelect.value = safeUpscaleMethod;
+            this.app.player.settings.upscaleMethod = safeUpscaleMethod;
+        }
         if (upscaleTargetSelect) upscaleTargetSelect.value = s.upscaleTarget || '1080p';
+
+        transcodePresetButtons.forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const presetKey = String(btn.dataset.transcodePreset || '').toLowerCase();
+                const preset = transcodingPresets[presetKey];
+                if (!preset) return;
+
+                try {
+                    applyTranscodingProfile(preset.values);
+                    await this.app.player.saveSettings();
+                    if (autoOptimizeFeedback) {
+                        autoOptimizeFeedback.textContent = `${preset.label} preset applied.`;
+                    }
+                } catch (err) {
+                    console.error('Failed to apply transcoding preset:', err);
+                    if (autoOptimizeFeedback) {
+                        autoOptimizeFeedback.textContent = `Failed to apply preset: ${err.message}`;
+                    }
+                }
+            });
+        });
 
         // Upscaling event handlers
         upscaleEnabledToggle?.addEventListener('change', () => {
@@ -689,7 +799,9 @@ class SettingsPage {
         });
 
         upscaleMethodSelect?.addEventListener('change', () => {
-            this.app.player.settings.upscaleMethod = upscaleMethodSelect.value;
+            const selectedMethod = normalizeUpscaleMethod(upscaleMethodSelect.value);
+            upscaleMethodSelect.value = selectedMethod;
+            this.app.player.settings.upscaleMethod = selectedMethod;
             this.app.player.saveSettings();
         });
 
@@ -736,6 +848,11 @@ class SettingsPage {
 
         // Auto optimization button
         autoOptimizeBtn?.addEventListener('click', async () => {
+            if (!isPremiumUser()) {
+                this.app?.showPremiumGatePopup?.('Auto Optimize For This System is a premium feature.');
+                return;
+            }
+
             const originalText = autoOptimizeBtn.textContent;
             autoOptimizeBtn.disabled = true;
             autoOptimizeBtn.textContent = 'Optimizing...';
@@ -746,23 +863,7 @@ class SettingsPage {
                 const applied = result?.settings || await API.settings.get();
 
                 // Sync player runtime settings so playback uses new profile immediately.
-                this.app.player.settings = { ...this.app.player.settings, ...applied };
-
-                if (hwEncoderSelect) hwEncoderSelect.value = applied.hwEncoder || 'auto';
-                if (maxResolutionSelect) maxResolutionSelect.value = applied.maxResolution || '1080p';
-                if (qualitySelect) qualitySelect.value = applied.quality || 'medium';
-                if (audioMixSelect) audioMixSelect.value = applied.audioMixPreset || 'auto';
-                if (forceProxyToggle) forceProxyToggle.checked = applied.forceProxy === true;
-                if (hagsEnabledToggle) hagsEnabledToggle.checked = applied.hagsEnabled === true;
-                if (autoTranscodeToggle) autoTranscodeToggle.checked = applied.autoTranscode !== false;
-                if (forceTranscodeToggle) forceTranscodeToggle.checked = applied.forceTranscode === true;
-                if (forceVideoTranscodeToggle) forceVideoTranscodeToggle.checked = applied.forceVideoTranscode === true;
-                if (forceRemuxToggle) forceRemuxToggle.checked = applied.forceRemux === true;
-                if (streamFormatSelect) streamFormatSelect.value = applied.streamFormat || 'm3u8';
-                if (upscaleEnabledToggle) upscaleEnabledToggle.checked = applied.upscaleEnabled === true;
-                if (upscaleMethodSelect) upscaleMethodSelect.value = applied.upscaleMethod || 'hardware';
-                if (upscaleTargetSelect) upscaleTargetSelect.value = applied.upscaleTarget || '1080p';
-                toggleUpscaleOptions(!!applied.upscaleEnabled);
+                applyTranscodingProfile(applied);
 
                 await this.loadHardwareInfo();
                 if (autoOptimizeFeedback) {

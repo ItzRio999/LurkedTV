@@ -154,7 +154,7 @@ function computeAutoProfileFromHardware(hw) {
     streamFormat: 'm3u8',
     audioMixPreset: 'auto',
     upscaleEnabled,
-    upscaleMethod: hasGpu ? 'hardware' : 'software',
+    upscaleMethod: 'hardware',
     upscaleTarget,
     probeCacheTTL: hasGpu ? 600 : 300,
     seriesProbeCacheDays: 7,

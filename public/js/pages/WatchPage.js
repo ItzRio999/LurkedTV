@@ -489,6 +489,13 @@ class WatchPage {
         this.transcodeStatusEx.classList.remove('hidden');
     }
 
+    getUpscaleStatusText(settings, probeInfo = null) {
+        const method = String(settings?.upscaleMethod || 'hardware').toLowerCase();
+        if (method === 'hardware') return 'Upscaling (GPU)';
+        if (method === 'software') return 'Upscaling (Lanczos)';
+        return 'Upscaling';
+    }
+
     /**
      * Get quality label from video height
      */
@@ -648,7 +655,9 @@ class WatchPage {
                     // Heuristic: If video is h264/compat, copy video. Usage: Audio fix. 
                     // BUT: If upscaling is enabled, we MUST encode.
                     const videoMode = (info.video && info.video.includes('h264') && !settings.upscaleEnabled) ? 'copy' : 'encode';
-                    const statusText = videoMode === 'copy' ? 'Transcoding (Audio)' : (settings.upscaleEnabled ? 'Upscaling' : 'Transcoding (Video)');
+                    const statusText = videoMode === 'copy'
+                        ? 'Transcoding (Audio)'
+                        : (settings.upscaleEnabled ? this.getUpscaleStatusText(settings, info) : 'Transcoding (Video)');
                     const statusMode = settings.upscaleEnabled ? 'upscaling' : 'transcoding';
 
                     this.updateTranscodeStatus(statusMode, statusText);
@@ -657,7 +666,9 @@ class WatchPage {
                         seekOffset: 0,
                         videoCodec: info.video,
                         audioCodec: info.audio,
-                        audioChannels: info.audioChannels
+                        audioChannels: info.audioChannels,
+                        sourceWidth: info.width,
+                        sourceHeight: info.height
                     });
                     this.playHls(playlistUrl);
                     this.setVolumeFromStorage();
@@ -685,13 +696,17 @@ class WatchPage {
 
         // Priority 1: Force Video Transcode (Full) or Upscaling
         if (settings.forceVideoTranscode || settings.upscaleEnabled) {
-            const statusText = settings.upscaleEnabled ? 'Upscaling' : 'Transcoding (Video)';
+            const statusText = settings.upscaleEnabled
+                ? this.getUpscaleStatusText(settings, this.currentStreamInfo)
+                : 'Transcoding (Video)';
             const statusMode = settings.upscaleEnabled ? 'upscaling' : 'transcoding';
             console.log(`[WatchPage] ${statusText} enabled. Starting session (encode)...`);
             this.updateTranscodeStatus(statusMode, statusText);
             const playlistUrl = await this.startTranscodeSession(url, {
                 videoMode: 'encode',
-                seekOffset: 0
+                seekOffset: 0,
+                sourceWidth: this.currentStreamInfo?.width,
+                sourceHeight: this.currentStreamInfo?.height
             });
             this.playHls(playlistUrl);
             this.setVolumeFromStorage();

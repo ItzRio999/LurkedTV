@@ -937,7 +937,9 @@ class VideoPlayer {
                         // Heuristic: If video is h264, it's likely compatible, so only copy video (audio transcode only)
                         // BUT: If upscaling is enabled, we MUST encode.
                         const videoMode = (info.video && info.video.includes('h264') && !this.settings.upscaleEnabled) ? 'copy' : 'encode';
-                        const statusText = videoMode === 'copy' ? 'Transcoding (Audio)' : (this.settings.upscaleEnabled ? 'Upscaling' : 'Transcoding (Video)');
+                        const statusText = videoMode === 'copy'
+                            ? 'Transcoding (Audio)'
+                            : (this.settings.upscaleEnabled ? this.getUpscaleStatusText(this.settings, info) : 'Transcoding (Video)');
                         const statusMode = this.settings.upscaleEnabled ? 'upscaling' : 'transcoding';
 
                         this.updateTranscodeStatus(statusMode, statusText);
@@ -945,7 +947,9 @@ class VideoPlayer {
                             videoMode,
                             videoCodec: info.video,
                             audioCodec: info.audio,
-                            audioChannels: info.audioChannels
+                            audioChannels: info.audioChannels,
+                            sourceWidth: info.width,
+                            sourceHeight: info.height
                         });
                         this.currentUrl = playlistUrl; // Update currentUrl for HLS reload
 
@@ -982,11 +986,17 @@ class VideoPlayer {
 
             // CHECK: Force Video Transcode (Full) or Upscaling
             if (this.settings.forceVideoTranscode || this.settings.upscaleEnabled) {
-                const statusText = this.settings.upscaleEnabled ? 'Upscaling' : 'Transcoding (Video)';
+                const statusText = this.settings.upscaleEnabled
+                    ? this.getUpscaleStatusText(this.settings, this.currentStreamInfo)
+                    : 'Transcoding (Video)';
                 const statusMode = this.settings.upscaleEnabled ? 'upscaling' : 'transcoding';
                 console.log(`[Player] ${statusText} enabled. Starting session (encode)...`);
                 this.updateTranscodeStatus(statusMode, statusText);
-                const playlistUrl = await this.startTranscodeSession(streamUrl, { videoMode: 'encode' });
+                const playlistUrl = await this.startTranscodeSession(streamUrl, {
+                    videoMode: 'encode',
+                    sourceWidth: this.currentStreamInfo?.width,
+                    sourceHeight: this.currentStreamInfo?.height
+                });
                 this.currentUrl = playlistUrl;
 
                 // Load HLS
@@ -1254,6 +1264,13 @@ class VideoPlayer {
 
         // Ensure it's visible
         el.classList.remove('hidden');
+    }
+
+    getUpscaleStatusText(settings, probeInfo = null) {
+        const method = String(settings?.upscaleMethod || 'hardware').toLowerCase();
+        if (method === 'hardware') return 'Upscaling (GPU)';
+        if (method === 'software') return 'Upscaling (Lanczos)';
+        return 'Upscaling';
     }
 
     /**

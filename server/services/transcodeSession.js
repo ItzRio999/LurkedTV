@@ -30,7 +30,9 @@ const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes idle timeout
 const SEGMENT_DURATION = 2; // seconds per HLS segment (faster startup/seeking)
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Check every 5 minutes
 const NON_ACTIONABLE_FFMPEG_WARNINGS = [
-    'mime type is not rfc8216 compliant'
+    'mime type is not rfc8216 compliant',
+    'co located pocs unavailable',
+    'co-located pocs unavailable'
 ];
 
 /**
@@ -78,7 +80,7 @@ class TranscodeSession extends EventEmitter {
             quality: options.quality || 'medium',
             // Upscaling options
             upscaleEnabled: options.upscaleEnabled || false,
-            upscaleMethod: options.upscaleMethod || 'hardware', // 'hardware' or 'software'
+            upscaleMethod: options.upscaleMethod || 'hardware', // hardware | software
             upscaleTarget: options.upscaleTarget || '1080p',
             ...options
         };
@@ -401,28 +403,51 @@ class TranscodeSession extends EventEmitter {
         }
     }
 
-    /**
-     * Get target height based on maxResolution or upscaleTarget setting
-     * When upscaling is enabled, uses the upscaleTarget resolution.
-     * Otherwise, uses maxResolution to cap the output.
-     */
-    getTargetHeight() {
+    getResolutionHeight(value, fallback = 1080) {
         const resolutionMap = {
             '4k': 2160,
             '1080p': 1080,
             '720p': 720,
             '480p': 480
         };
+        return resolutionMap[value] || fallback;
+    }
 
-        // When upscaling is enabled, use the upscale target resolution
-        if (this.options.upscaleEnabled) {
-            const target = resolutionMap[this.options.upscaleTarget] || 1080;
-            console.log(`[TranscodeSession ${this.id}] Upscale target height: ${target}p`);
-            return target;
+    getSourceHeight() {
+        const sourceHeight = Number(this.options.sourceHeight);
+        return Number.isFinite(sourceHeight) && sourceHeight > 0 ? Math.round(sourceHeight) : null;
+    }
+
+    isUpscaleActiveForHeight(targetHeight) {
+        if (!this.options.upscaleEnabled) return false;
+        const sourceHeight = this.getSourceHeight();
+        if (!sourceHeight) return true;
+        return targetHeight > sourceHeight;
+    }
+
+    resolveUpscaleMethod(encoder) {
+        const method = String(this.options.upscaleMethod || 'hardware').toLowerCase();
+        if (method === 'hardware' || method === 'software') {
+            return method;
+        }
+        return 'hardware';
+    }
+
+    /**
+     * Get target height based on maxResolution and upscaling rules.
+     * - Upscaling disabled: cap to maxResolution.
+     * - Upscaling enabled: target upscaleTarget.
+     */
+    getTargetHeight() {
+        const maxResolution = this.getResolutionHeight(this.options.maxResolution, 1080);
+        const upscaleTarget = this.getResolutionHeight(this.options.upscaleTarget, 1080);
+
+        if (!this.options.upscaleEnabled) {
+            return maxResolution;
         }
 
-        // Otherwise, use max resolution as the cap
-        return resolutionMap[this.options.maxResolution] || 1080;
+        console.log(`[TranscodeSession ${this.id}] Upscale target height: ${upscaleTarget}p`);
+        return upscaleTarget;
     }
 
     /**
@@ -431,21 +456,21 @@ class TranscodeSession extends EventEmitter {
      * @param {number} height - Target height
      */
     buildScaleFilter(encoder, height) {
-        const useUpscale = this.options.upscaleEnabled;
-        const upscaleMethod = this.options.upscaleMethod || 'hardware';
+        const useUpscale = this.isUpscaleActiveForHeight(height);
+        const upscaleMethod = this.resolveUpscaleMethod(encoder);
 
         // Log upscaling status
-        if (useUpscale) {
+        if (this.options.upscaleEnabled) {
             console.log(`[TranscodeSession ${this.id}] Upscaling: ${upscaleMethod} method to ${height}p`);
         }
 
-        // Hardware scaling filters (for both upscale and downscale)
-        if (upscaleMethod === 'hardware' || !useUpscale) {
+        // Hardware scaling filters
+        if (upscaleMethod === 'hardware') {
             switch (encoder) {
                 case 'nvenc':
                     // NVIDIA CUDA scaling with Lanczos
                     // Force nv12 (8-bit) output to handle 10-bit inputs (fixes "10 bit encode not supported")
-                    return `scale_cuda=-2:${height}:interp_algo=lanczos:format=nv12`;
+                    return `scale_cuda=-2:${height}:interp_algo=${useUpscale ? 'lanczos' : 'bilinear'}:format=nv12`;
                 case 'vaapi':
                     return `scale_vaapi=w=-2:h=${height}:format=nv12`;
                 case 'qsv':
@@ -550,10 +575,11 @@ class TranscodeSession extends EventEmitter {
     addSoftwareEncoderArgs(args, height, crf, threadPlan = {}) {
         // Software scaling (use Lanczos for upscaling if enabled)
         args.push('-vf', this.buildScaleFilter('software', height));
+        const shouldPreferFastPreset = this.isUpscaleActiveForHeight(height);
 
         args.push(
             '-c:v', 'libx264',
-            '-preset', this.options.upscaleEnabled ? 'superfast' : 'veryfast', // Prefer faster startup for upscale transcodes
+            '-preset', shouldPreferFastPreset ? 'superfast' : 'veryfast', // Prefer faster startup only when actual upscale is active
             '-crf', String(crf),
             '-tune', 'zerolatency',
             '-profile:v', 'high',

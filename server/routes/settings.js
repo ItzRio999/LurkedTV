@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { settings, getDefaultSettings } = require('../db');
+const { settings, users, getDefaultSettings } = require('../db');
 const auth = require('../auth');
 const syncService = require('../services/syncService');
 const firebaseCacheSync = require('../services/firebaseCacheSync');
@@ -37,6 +37,17 @@ function toSafeInt(value, fallback) {
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
+function normalizeUpscaleMethod(settingsObj = {}) {
+    const normalized = String(settingsObj?.upscaleMethod || '').toLowerCase();
+    if (!normalized || normalized === 'hardware' || normalized === 'software') {
+        return { ...settingsObj };
+    }
+    return {
+        ...settingsObj,
+        upscaleMethod: 'hardware'
+    };
+}
+
 async function getEffectiveDiscordBotConfig() {
     const s = await settings.get();
     return {
@@ -71,6 +82,7 @@ async function discordApiRequest(pathname) {
 router.get('/', async (req, res) => {
     try {
         let currentSettings = await settings.get();
+        const persistedUpscaleMethod = currentSettings.upscaleMethod;
 
         // Ensure optimized auto-profile is applied at least once.
         if (!currentSettings.autoProfileVersion || currentSettings.autoProfileVersion < 1) {
@@ -79,7 +91,10 @@ router.get('/', async (req, res) => {
             const result = await settings.applyAutoProfileIfNeeded(capabilities);
             currentSettings = result.settings;
         }
-
+        currentSettings = normalizeUpscaleMethod(currentSettings);
+        if (currentSettings.upscaleMethod !== persistedUpscaleMethod) {
+            await settings.update({ upscaleMethod: currentSettings.upscaleMethod });
+        }
         res.json(currentSettings);
     } catch (err) {
         console.error('Error getting settings:', err);
@@ -91,9 +106,9 @@ router.get('/', async (req, res) => {
  * Update settings (partial update)
  * PUT /api/settings
  */
-router.put('/', async (req, res) => {
+router.put('/', auth.requireAuth, async (req, res) => {
     try {
-        const updates = req.body;
+        const updates = normalizeUpscaleMethod(req.body || {});
         const updatedSettings = await settings.update(updates);
 
         // If sync interval changed, restart the server-side sync timer
@@ -198,8 +213,16 @@ router.post('/hw-info/refresh', async (req, res) => {
  * Apply or re-apply system auto-profile from detected hardware
  * POST /api/settings/auto-profile/apply
  */
-router.post('/auto-profile/apply', async (req, res) => {
+router.post('/auto-profile/apply', auth.requireAuth, async (req, res) => {
     try {
+        const currentUser = await users.getById(req.user.id);
+        if (!currentUser) {
+            return res.status(401).json({ error: 'User not found' });
+        }
+        if (currentUser.premium !== true) {
+            return res.status(403).json({ error: 'Premium required' });
+        }
+
         const hwDetect = require('../services/hwDetect');
         const refreshHardware = req.body?.refreshHardware === true;
         const force = req.body?.force !== false; // default true for manual endpoint

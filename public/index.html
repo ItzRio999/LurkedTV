@@ -759,7 +759,15 @@
                 <p class="hint">Loading hardware information...</p>
               </div>
               <div class="setting-item">
-                <button class="btn btn-secondary btn-sm" id="auto-optimize-btn">Auto Optimize For This System</button>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <span class="setting-hint">Quick Presets:</span>
+                  <button type="button" class="btn btn-secondary btn-sm" id="transcode-preset-performance-btn" data-transcode-preset="performance">Performance</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="transcode-preset-balanced-btn" data-transcode-preset="balanced">Balanced</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="transcode-preset-quality-btn" data-transcode-preset="quality">Quality</button>
+                </div>
+              </div>
+              <div class="setting-item">
+                <button type="button" class="btn btn-secondary btn-sm" id="auto-optimize-btn">Auto Optimize For This System</button>
                 <span class="hint" id="auto-optimize-feedback"></span>
               </div>
             </div>
@@ -842,7 +850,7 @@ If playback fails, switch to Software (CPU) for maximum compatibility.">?</butto
               <div class="setting-item" id="upscale-method-container" style="display: none;">
                 <div class="setting-info" style="flex: 1;">
                   <span class="setting-label">Upscale Method</span>
-                  <span class="setting-hint">Hardware is faster; Software (Lanczos) is higher quality.</span>
+                  <span class="setting-hint">Choose GPU for speed or software Lanczos for quality.</span>
                 </div>
                 <select id="setting-upscale-method" class="source-select" style="width: auto; min-width: 200px;">
                   <option value="hardware">Hardware (GPU)</option>

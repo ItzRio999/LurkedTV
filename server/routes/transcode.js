@@ -6,7 +6,9 @@ const fs = require('fs').promises;
 const db = require('../db');
 const transcodeSession = require('../services/transcodeSession');
 const NON_ACTIONABLE_FFMPEG_WARNINGS = [
-    'mime type is not rfc8216 compliant'
+    'mime type is not rfc8216 compliant',
+    'co located pocs unavailable',
+    'co-located pocs unavailable'
 ];
 
 /**
@@ -32,7 +34,7 @@ transcodeSession.startCleanupInterval();
  * Body: { url: string, seekOffset?: number }
  */
 router.post('/session', async (req, res) => {
-    const { url, seekOffset, videoMode, videoCodec, audioCodec, audioChannels } = req.body;
+    const { url, seekOffset, videoMode, videoCodec, audioCodec, audioChannels, sourceWidth, sourceHeight } = req.body;
 
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -41,6 +43,9 @@ router.post('/session', async (req, res) => {
     const ffmpegPath = req.app.locals.ffmpegPath || 'ffmpeg';
     const settings = await db.settings.get();
     const userAgent = db.getUserAgent(settings);
+    const normalizedUpscaleMethod = String(settings.upscaleMethod || 'hardware').toLowerCase() === 'software'
+        ? 'software'
+        : 'hardware';
 
     try {
         const session = await transcodeSession.createSession(url, {
@@ -54,12 +59,14 @@ router.post('/session', async (req, res) => {
             audioMixPreset: settings.audioMixPreset || 'auto', // Audio downmix preset
             // Upscaling options
             upscaleEnabled: settings.upscaleEnabled || false,
-            upscaleMethod: settings.upscaleMethod || 'hardware',
+            upscaleMethod: normalizedUpscaleMethod,
             upscaleTarget: settings.upscaleTarget || '1080p',
             videoMode: videoMode, // 'copy' or 'encode'
             videoCodec: videoCodec, // 'h264', 'hevc', etc.
             audioCodec: audioCodec, // 'aac', 'ac3', etc.
-            audioChannels: audioChannels // number of channels (2=stereo)
+            audioChannels: audioChannels, // number of channels (2=stereo)
+            sourceWidth: Number.isFinite(Number(sourceWidth)) ? Number(sourceWidth) : null,
+            sourceHeight: Number.isFinite(Number(sourceHeight)) ? Number(sourceHeight) : null
         });
 
         await session.start();
@@ -67,7 +74,10 @@ router.post('/session', async (req, res) => {
         // Wait for playlist to be ready (first segments generated).
         // Seeking deep into VOD can take materially longer to produce first segment.
         const safeSeekOffset = Number.isFinite(Number(seekOffset)) ? Math.max(0, Number(seekOffset)) : 0;
-        const baseStartupMs = 3500;
+        const configuredBaseStartupMs = Number.parseInt(process.env.TRANSCODE_STARTUP_TIMEOUT_MS || '', 10);
+        const baseStartupMs = Number.isFinite(configuredBaseStartupMs) && configuredBaseStartupMs > 0
+            ? configuredBaseStartupMs
+            : 6000;
         const copyModePenaltyMs = videoMode === 'copy' ? 1500 : 500;
         const seekPenaltyMs = Math.min(12000, Math.floor(safeSeekOffset * 25)); // +25ms per seek second, capped at +12s
         const startupTimeoutMs = baseStartupMs + copyModePenaltyMs + seekPenaltyMs;
