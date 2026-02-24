@@ -1,6 +1,6 @@
 {
     "name": "nodecast-tv",
-    "version": "5.0.0",
+    "version": "6.0.0",
     "description": "Modern IPTV Player",
     "license": "GPL-3.0-only",
     "main": "server/index.js",

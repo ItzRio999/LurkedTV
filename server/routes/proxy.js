@@ -12,13 +12,32 @@ const https = require('https');
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 const { Readable } = require('stream');
+const { once } = require('events');
 
 // Default cache max age in hours
 const DEFAULT_MAX_AGE_HOURS = 24;
+const stmtCache = new Map();
+
+function getStmt(sql) {
+    let stmt = stmtCache.get(sql);
+    if (!stmt) {
+        stmt = getDb().prepare(sql);
+        stmtCache.set(sql, stmt);
+    }
+    return stmt;
+}
+
+function parseJsonSafe(raw) {
+    if (!raw) return {};
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return {};
+    }
+}
 
 // Helper to get formatted category list from DB
 function getCategoriesFromDb(sourceId, type, includeHidden = false) {
-    const db = getDb();
     let query = `
         SELECT category_id, name as category_name, parent_id 
         FROM categories 
@@ -28,13 +47,12 @@ function getCategoriesFromDb(sourceId, type, includeHidden = false) {
         query += ` AND is_hidden = 0`;
     }
     query += ` ORDER BY name ASC`;
-    const cats = db.prepare(query).all(sourceId, type);
+    const cats = getStmt(query).all(sourceId, type);
     return cats;
 }
 
 // Helper to get formatted streams from DB
 function getStreamsFromDb(sourceId, type, categoryId = null, includeHidden = false) {
-    const db = getDb();
     let query = `
         SELECT item_id, name, stream_icon, added_at, rating, container_extension, year, category_id, data
         FROM playlist_items 
@@ -53,17 +71,16 @@ function getStreamsFromDb(sourceId, type, categoryId = null, includeHidden = fal
     // Default sorting
     // query += ` ORDER BY name ASC`; // Sorting usually handled by client
 
-    const items = db.prepare(query).all(...params);
+    const items = getStmt(query).all(...params);
 
     // Map to Xtream format
     return items.map(item => {
-        const data = JSON.parse(item.data || '{}');
+        const data = parseJsonSafe(item.data);
         // Override with our local fields if needed, or just return the mixed object
         // We should ensure critical fields are present
-        return {
+        const mapped = {
             ...data,
             stream_id: item.item_id, // ensure ID matches what client expects
-            series_id: type === 'series' ? item.item_id : undefined,
             name: item.name,
             stream_icon: item.stream_icon,
             cover: item.stream_icon, // series/vod often use cover
@@ -74,6 +91,10 @@ function getStreamsFromDb(sourceId, type, categoryId = null, includeHidden = fal
             // Normalize EPG channel ID: Xtream uses epg_channel_id, M3U uses tvgId
             epg_channel_id: data.epg_channel_id || data.tvgId || null
         };
+        if (type === 'series') {
+            mapped.series_id = item.item_id;
+        }
+        return mapped;
     });
 }
 
@@ -661,23 +682,22 @@ router.get('/stream', async (req, res) => {
                 return res.send(manifest);
             }
 
-            // Binary content (Video Segment or Key): Collect and send
+            // Binary content (Video Segment or Key): stream directly to reduce memory and latency
             console.log(`[Proxy] Serving binary content (${contentType})`);
             res.set('Content-Type', contentType || 'application/octet-stream');
 
-            // For small files (like encryption keys), collect all data and send at once
-            // This ensures proper Content-Length and response completion
-            const chunks = [firstChunk];
+            if (!res.write(firstChunk)) {
+                await once(res, 'drain');
+            }
+
             let result = await iterator.next();
             while (!result.done) {
-                chunks.push(Buffer.from(result.value));
+                if (!res.write(Buffer.from(result.value))) {
+                    await once(res, 'drain');
+                }
                 result = await iterator.next();
             }
-            const fullContent = Buffer.concat(chunks);
-
-            // Set Content-Length for proper client handling
-            res.set('Content-Length', fullContent.length);
-            res.send(fullContent);
+            res.end();
             return; // Success - exit the retry loop
 
         } catch (err) {

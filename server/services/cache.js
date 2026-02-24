@@ -1,27 +1,27 @@
-/**
- * File-based Cache Service
- * Stores cached data as JSON files in data/cache/
- */
-
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 
-// Cache directory
 const cacheDir = path.join(__dirname, '..', '..', 'data', 'cache');
+const memoryCache = new Map();
+const knownDirs = new Set();
 
-// Ensure cache directories exist
+function normalizeKey(type, sourceId, key) {
+    return `${type}:${sourceId}:${String(key || 'default')}`;
+}
+
 function ensureCacheDir(type, sourceId) {
     const dir = path.join(cacheDir, type, String(sourceId));
+    if (knownDirs.has(dir)) return dir;
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
+    knownDirs.add(dir);
     return dir;
 }
 
-// Get cache file path
 function getCachePath(type, sourceId, key) {
     const dir = ensureCacheDir(type, sourceId);
-    // Sanitize key for filename
     const safeKey = String(key || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
     return path.join(dir, `${safeKey}.json`);
 }
@@ -36,13 +36,23 @@ function getCachePath(type, sourceId, key) {
  */
 function get(type, sourceId, key, maxAgeMs) {
     try {
-        const cachePath = getCachePath(type, sourceId, key);
+        const mapKey = normalizeKey(type, sourceId, key);
+        const inMemory = memoryCache.get(mapKey);
+        if (inMemory) {
+            if (Date.now() - inMemory.timestamp <= maxAgeMs) {
+                return inMemory.data;
+            }
+            memoryCache.delete(mapKey);
+            return null;
+        }
 
+        const cachePath = getCachePath(type, sourceId, key);
         if (!fs.existsSync(cachePath)) {
             return null;
         }
 
         const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+        memoryCache.set(mapKey, cached);
         const age = Date.now() - cached.timestamp;
 
         if (age > maxAgeMs) {
@@ -65,12 +75,17 @@ function get(type, sourceId, key, maxAgeMs) {
  */
 function set(type, sourceId, key, data) {
     try {
+        const mapKey = normalizeKey(type, sourceId, key);
+        const now = Date.now();
         const cachePath = getCachePath(type, sourceId, key);
         const cached = {
-            timestamp: Date.now(),
+            timestamp: now,
             data: data
         };
-        fs.writeFileSync(cachePath, JSON.stringify(cached));
+        memoryCache.set(mapKey, cached);
+        fsp.writeFile(cachePath, JSON.stringify(cached), 'utf-8').catch(err => {
+            console.error(`Cache write error for ${type}/${sourceId}/${key}:`, err.message);
+        });
     } catch (err) {
         console.error(`Cache write error for ${type}/${sourceId}/${key}:`, err.message);
     }
@@ -81,6 +96,7 @@ function set(type, sourceId, key, data) {
  */
 function clear(type, sourceId, key) {
     try {
+        memoryCache.delete(normalizeKey(type, sourceId, key));
         const cachePath = getCachePath(type, sourceId, key);
         if (fs.existsSync(cachePath)) {
             fs.unlinkSync(cachePath);
@@ -95,6 +111,13 @@ function clear(type, sourceId, key) {
  */
 function clearSource(sourceId) {
     try {
+        const suffix = `:${String(sourceId)}:`;
+        for (const key of memoryCache.keys()) {
+            if (key.includes(suffix)) {
+                memoryCache.delete(key);
+            }
+        }
+
         const types = ['epg', 'm3u', 'xtream'];
         for (const type of types) {
             const dir = path.join(cacheDir, type, String(sourceId));
@@ -112,6 +135,8 @@ function clearSource(sourceId) {
  */
 function clearAll() {
     try {
+        memoryCache.clear();
+        knownDirs.clear();
         if (fs.existsSync(cacheDir)) {
             fs.rmSync(cacheDir, { recursive: true });
         }

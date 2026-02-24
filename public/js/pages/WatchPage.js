@@ -1279,8 +1279,10 @@ class WatchPage {
         if (!this.canSaveHistory()) return;
 
         const payload = this.getHistoryPayload(reason, completed);
-        const allowZeroDurationStartLog = payload?.type === 'movie' && reason === 'play';
-        if (!payload.duration && !completed && !allowZeroDurationStartLog) return;
+        const allowZeroDurationStartLog = reason === 'play';
+        // Some series streams do not expose duration immediately.
+        // Still persist early progress so "currently watching" (Discord/status UI) stays accurate.
+        if (!payload.duration && !completed && !allowZeroDurationStartLog && payload.progress <= 0) return;
 
         const now = Date.now();
         const progressDelta = Math.abs(payload.progress - this.lastHistorySavedProgress);

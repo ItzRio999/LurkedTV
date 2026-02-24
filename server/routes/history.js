@@ -5,6 +5,23 @@ const { requireAuth } = require('../auth');
 
 // Middleware to ensure authentication
 router.use(requireAuth);
+const stmtCache = new Map();
+
+function getStmt(key, sql) {
+    if (!stmtCache.has(key)) {
+        stmtCache.set(key, getDb().prepare(sql));
+    }
+    return stmtCache.get(key);
+}
+
+function parseJsonSafe(raw) {
+    if (!raw) return {};
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return {};
+    }
+}
 
 /**
  * GET /api/history
@@ -12,30 +29,30 @@ router.use(requireAuth);
  */
 router.get('/', (req, res) => {
     try {
-        const db = getDb();
         const userId = req.user.id;
-        const limit = parseInt(req.query.limit) || 20;
+        const requestedLimit = parseInt(req.query.limit, 10);
+        const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 20;
 
-        const rows = db.prepare(`
-            SELECT * FROM watch_history 
-            WHERE user_id = ? 
+        const rows = getStmt('history.list', `
+            WITH ranked AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(source_id, 0), COALESCE(item_type, ''), item_id
+                        ORDER BY updated_at DESC
+                    ) AS rn
+                FROM watch_history
+                WHERE user_id = ?
+            )
+            SELECT * FROM ranked
+            WHERE rn = 1
             ORDER BY updated_at DESC
-        `).all(userId);
+            LIMIT ?
+        `).all(userId, limit);
 
-        // De-duplicate legacy rows by source/type/item and keep most recent entry.
-        const seen = new Set();
-        const uniqueRows = [];
-        for (const row of rows) {
-            const key = `${row.source_id || 0}:${row.item_type || ''}:${row.item_id || ''}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            uniqueRows.push(row);
-            if (uniqueRows.length >= limit) break;
-        }
-
-        const history = uniqueRows.map(row => ({
+        const history = rows.map(row => ({
             ...row,
-            data: JSON.parse(row.data || '{}')
+            data: parseJsonSafe(row.data)
         }));
 
         res.json(history);
@@ -51,7 +68,6 @@ router.get('/', (req, res) => {
  */
 router.get('/item/:itemId', (req, res) => {
     try {
-        const db = getDb();
         const userId = req.user.id;
         const itemId = req.params.itemId;
         const sourceId = req.query.sourceId !== undefined ? Number(req.query.sourceId) : null;
@@ -59,28 +75,28 @@ router.get('/item/:itemId', (req, res) => {
 
         let row;
         if (sourceId !== null && Number.isFinite(sourceId) && type) {
-            row = db.prepare(`
+            row = getStmt('history.item.bySourceType', `
                 SELECT * FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND source_id = ? AND item_type = ?
                 ORDER BY updated_at DESC
                 LIMIT 1
             `).get(userId, itemId, sourceId, type);
         } else if (sourceId !== null && Number.isFinite(sourceId)) {
-            row = db.prepare(`
+            row = getStmt('history.item.bySource', `
                 SELECT * FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND source_id = ?
                 ORDER BY updated_at DESC
                 LIMIT 1
             `).get(userId, itemId, sourceId);
         } else if (type) {
-            row = db.prepare(`
+            row = getStmt('history.item.byType', `
                 SELECT * FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND item_type = ?
                 ORDER BY updated_at DESC
                 LIMIT 1
             `).get(userId, itemId, type);
         } else {
-            row = db.prepare(`
+            row = getStmt('history.item.byItem', `
                 SELECT * FROM watch_history
                 WHERE user_id = ? AND item_id = ?
                 ORDER BY updated_at DESC
@@ -94,7 +110,7 @@ router.get('/item/:itemId', (req, res) => {
 
         res.json({
             ...row,
-            data: JSON.parse(row.data || '{}')
+            data: parseJsonSafe(row.data)
         });
     } catch (err) {
         console.error('[History] Error fetching single history item:', err);
@@ -108,7 +124,6 @@ router.get('/item/:itemId', (req, res) => {
  */
 router.post('/', (req, res) => {
     try {
-        const db = getDb();
         const userId = req.user.id;
         const { id, type, parentId, progress, duration, data, sourceId, completed } = req.body;
 
@@ -134,7 +149,7 @@ router.post('/', (req, res) => {
         );
 
         if (isCompleted) {
-            const deleteStmt = db.prepare(`
+            const deleteStmt = getStmt('history.delete.completed', `
                 DELETE FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND source_id = ? AND item_type = ?
             `);
@@ -142,7 +157,7 @@ router.post('/', (req, res) => {
             return res.json({ success: true, removed: true, timestamp });
         }
 
-        const stmt = db.prepare(`
+        const stmt = getStmt('history.upsert', `
             INSERT INTO watch_history (id, user_id, source_id, item_type, item_id, parent_id, progress, duration, updated_at, data)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
@@ -195,9 +210,8 @@ router.post('/', (req, res) => {
  */
 router.delete('/', (req, res) => {
     try {
-        const db = getDb();
         const userId = req.user.id;
-        const stmt = db.prepare('DELETE FROM watch_history WHERE user_id = ?');
+        const stmt = getStmt('history.delete.all', 'DELETE FROM watch_history WHERE user_id = ?');
         const result = stmt.run(userId);
         res.json({ success: true, removed: result.changes || 0 });
     } catch (err) {
@@ -212,7 +226,6 @@ router.delete('/', (req, res) => {
  */
 router.delete('/:itemId', (req, res) => {
     try {
-        const db = getDb();
         const userId = req.user.id;
         const itemId = req.params.itemId;
         const sourceId = req.query.sourceId !== undefined ? Number(req.query.sourceId) : null;
@@ -220,25 +233,25 @@ router.delete('/:itemId', (req, res) => {
 
         let result;
         if (sourceId !== null && Number.isFinite(sourceId) && type) {
-            const stmt = db.prepare(`
+            const stmt = getStmt('history.delete.bySourceType', `
                 DELETE FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND source_id = ? AND item_type = ?
             `);
             result = stmt.run(userId, itemId, sourceId, type);
         } else if (sourceId !== null && Number.isFinite(sourceId)) {
-            const stmt = db.prepare(`
+            const stmt = getStmt('history.delete.bySource', `
                 DELETE FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND source_id = ?
             `);
             result = stmt.run(userId, itemId, sourceId);
         } else if (type) {
-            const stmt = db.prepare(`
+            const stmt = getStmt('history.delete.byType', `
                 DELETE FROM watch_history
                 WHERE user_id = ? AND item_id = ? AND item_type = ?
             `);
             result = stmt.run(userId, itemId, type);
         } else {
-            const stmt = db.prepare('DELETE FROM watch_history WHERE user_id = ? AND item_id = ?');
+            const stmt = getStmt('history.delete.byItem', 'DELETE FROM watch_history WHERE user_id = ? AND item_id = ?');
             result = stmt.run(userId, itemId);
         }
 

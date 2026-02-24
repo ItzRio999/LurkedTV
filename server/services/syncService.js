@@ -89,12 +89,27 @@ class SyncService {
         console.log('[Sync] Starting global sync...');
         try {
             const allSources = await sources.getAll();
-            for (const source of allSources) {
-                if (source.enabled) {
-                    // Run sequentially to not overload
+            const enabledSources = allSources.filter(source => source.enabled);
+            const requestedConcurrency = Number.parseInt(process.env.SYNC_CONCURRENCY || '', 10);
+            const concurrency = Number.isFinite(requestedConcurrency) && requestedConcurrency > 0
+                ? requestedConcurrency
+                : 2;
+
+            if (concurrency <= 1 || enabledSources.length <= 1) {
+                for (const source of enabledSources) {
                     await this.syncSource(source.id);
                 }
+            } else {
+                let cursor = 0;
+                const workers = Array.from({ length: Math.min(concurrency, enabledSources.length) }, async () => {
+                    while (cursor < enabledSources.length) {
+                        const current = enabledSources[cursor++];
+                        await this.syncSource(current.id);
+                    }
+                });
+                await Promise.all(workers);
             }
+
             this.lastSyncTime = new Date();
             console.log('[Sync] Global sync completed at', this.lastSyncTime.toISOString());
         } catch (err) {

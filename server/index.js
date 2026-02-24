@@ -12,6 +12,7 @@ const dbStore = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const startupAt = Date.now();
+const isProduction = process.env.NODE_ENV === 'production';
 
 function clearConsole() {
     if (process.stdout.isTTY && process.env.NO_CLEAR !== '1') {
@@ -39,6 +40,8 @@ startupDivider('LurkedTv Server Boot');
 // Trust proxy headers (X-Forwarded-Proto, X-Forwarded-For, etc.)
 // Required for correct protocol detection behind reverse proxies (nginx, Caddy, etc.)
 app.set('trust proxy', true);
+app.disable('x-powered-by');
+app.set('etag', 'strong');
 
 // Middleware
 app.use(express.json({ limit: '50mb' }));
@@ -48,7 +51,7 @@ const session = require('express-session');
 app.use(session({
     secret: process.env.JWT_SECRET || 'keyboard cat',
     resave: false,
-    saveUninitialized: true
+    saveUninitialized: false
 }));
 app.use(passport.initialize());
 app.use(passport.session());
@@ -58,11 +61,14 @@ app.use(passport.session());
 // is the recommended dev entry point and proxies /api requests here.
 const distDir = path.join(__dirname, '..', 'dist');
 const publicDir = path.join(__dirname, '..', 'public');
-const frontendDir = (process.env.NODE_ENV === 'production' && fs.existsSync(distDir))
+const frontendDir = (isProduction && fs.existsSync(distDir))
   ? distDir
   : publicDir;
 
-app.use(express.static(frontendDir));
+app.use(express.static(frontendDir, {
+    etag: true,
+    maxAge: isProduction ? '1h' : 0
+}));
 
 // FFMPEG Configuration (optional - for transcoding support)
 // Priority: 1. System FFmpeg (better Docker DNS support), 2. ffmpeg-static npm package
@@ -235,6 +241,13 @@ app.use((err, req, res, next) => {
 app.listen(PORT, async () => {
     startupLog(`Server running on http://localhost:${PORT}`);
     startupLog(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    try {
+        await dbStore.loadDb();
+        require('./db/sqlite').getDb();
+        startupLog('Data stores warmed');
+    } catch (err) {
+        console.warn('[Startup] Data store warmup failed:', err.message);
+    }
 
     // Load plugins
     await loadPlugins().catch(err => {

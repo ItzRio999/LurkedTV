@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const auth = require('../auth');
 const crypto = require('crypto');
+const net = require('net');
 
 // Configure Passport strategies
 auth.configureLocalStrategy(
@@ -136,6 +137,192 @@ function buildDiscordAvatarUrl(discordUser) {
     return `https://cdn.discordapp.com/avatars/${userId}/${avatar}.${ext}?size=128`;
 }
 
+function extractClientIp(req) {
+    const forwardedFor = String(req.headers['x-forwarded-for'] || '')
+        .split(',')
+        .map(v => v.trim())
+        .find(Boolean);
+    const realIp = String(req.headers['x-real-ip'] || '').trim();
+    const candidate = forwardedFor || realIp || String(req.ip || req.socket?.remoteAddress || '').trim();
+    if (!candidate) return '';
+
+    let value = candidate;
+    if (value.startsWith('::ffff:')) value = value.slice(7);
+    const bracketIpv6 = value.match(/^\[([^\]]+)\](?::\d+)?$/);
+    if (bracketIpv6) value = bracketIpv6[1];
+    const ipv4WithPort = value.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+    if (ipv4WithPort) value = ipv4WithPort[1];
+
+    if (value === '::1') return '127.0.0.1';
+    return value;
+}
+
+function getIpVisibility(ip) {
+    const value = String(ip || '').trim();
+    if (!value || value.toLowerCase() === 'localhost') return 'unknown';
+    const family = net.isIP(value);
+    if (!family) return 'unknown';
+    if (family === 4) {
+        if (value.startsWith('127.')) return 'loopback';
+        if (value.startsWith('10.')) return 'private';
+        if (value.startsWith('192.168.')) return 'private';
+        if (value.startsWith('169.254.')) return 'private';
+        const secondOctet = Number(value.split('.')[1] || 0);
+        if (value.startsWith('172.') && secondOctet >= 16 && secondOctet <= 31) return 'private';
+    } else {
+        const normalized = value.toLowerCase();
+        if (normalized === '::1') return 'loopback';
+        if (normalized.startsWith('fc') || normalized.startsWith('fd')) return 'private';
+        if (normalized.startsWith('fe80')) return 'private';
+    }
+    return 'public';
+}
+
+function isPublicIp(ip) {
+    return getIpVisibility(ip) === 'public';
+}
+
+function formatIpForDisplay(ip) {
+    const value = String(ip || '').trim();
+    if (!value) return 'Unavailable';
+    const visibility = getIpVisibility(value);
+    if (visibility === 'loopback') return `${value} (localhost)`;
+    if (visibility === 'private') return `${value} (private network)`;
+    if (visibility === 'public') return `${value} (public)`;
+    return value;
+}
+
+function formatGeoForDisplay(geo, ip) {
+    if (geo) {
+        const place = [geo.city, geo.region, geo.country].filter(Boolean).join(', ');
+        const coords = (geo.latitude !== null && geo.longitude !== null)
+            ? ` (${geo.latitude}, ${geo.longitude})`
+            : '';
+        return `${place || 'Location resolved'}${coords}`;
+    }
+    const visibility = getIpVisibility(ip);
+    if (visibility === 'loopback' || visibility === 'private') return 'Not available for local/private IP';
+    if (visibility === 'public') return 'Lookup failed';
+    return 'Unavailable';
+}
+
+function parseClientFromUserAgent(userAgent) {
+    const ua = String(userAgent || '').toLowerCase();
+    if (!ua) return 'unknown';
+    if (ua.includes('discord')) return 'Discord';
+    if (ua.includes('edg/')) return 'Edge';
+    if (ua.includes('opr/') || ua.includes('opera')) return 'Opera';
+    if (ua.includes('chrome/')) return 'Chrome';
+    if (ua.includes('firefox/')) return 'Firefox';
+    if (ua.includes('safari/') && !ua.includes('chrome/')) return 'Safari';
+    if (ua.includes('postman')) return 'Postman';
+    if (ua.includes('curl/')) return 'curl';
+    return 'other';
+}
+
+async function lookupGeoByIp(ip) {
+    if (!isPublicIp(ip)) return null;
+    try {
+        const response = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
+            signal: AbortSignal.timeout(2500)
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data?.success === false) return null;
+
+        const city = String(data?.city || '').trim();
+        const region = String(data?.region || '').trim();
+        const country = String(data?.country || '').trim();
+
+        return {
+            city: city || null,
+            region: region || null,
+            country: country || null,
+            countryCode: String(data?.country_code || '').trim() || null,
+            latitude: Number.isFinite(Number(data?.latitude)) ? Number(data.latitude) : null,
+            longitude: Number.isFinite(Number(data?.longitude)) ? Number(data.longitude) : null,
+            timezone: String(data?.timezone?.id || '').trim() || null,
+            org: String(data?.connection?.org || '').trim() || null,
+            isp: String(data?.connection?.isp || '').trim() || null
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+async function getConfiguredDiscordLogChannelId() {
+    try {
+        const s = await db.settings.get();
+        return String(s?.discordLogChannelId || '').trim();
+    } catch (_) {
+        return '';
+    }
+}
+
+async function sendDiscordAuditLogToChannel(payload) {
+    const botToken = getDiscordBotToken();
+    const channelId = await getConfiguredDiscordLogChannelId();
+    if (!botToken || !channelId || !payload) return false;
+
+    try {
+        const ipLabel = formatIpForDisplay(payload.ip);
+        const geoLabel = formatGeoForDisplay(payload.geo, payload.ip);
+        const siteUser = `${payload.siteUsername || 'unknown'} (#${payload.siteUserId || 'n/a'})`;
+        const discordUser = `${payload.discordUsername || 'unknown'} (${payload.discordId || 'n/a'})`;
+
+        const embed = {
+            title: 'Discord Link Audit',
+            color: 0x5865F2,
+            timestamp: payload.timestamp || new Date().toISOString(),
+            fields: [
+                { name: 'Site User', value: siteUser, inline: true },
+                { name: 'Discord User', value: discordUser, inline: true },
+                { name: 'Client', value: payload.client || 'unknown', inline: true },
+                { name: 'IP Address', value: ipLabel, inline: false },
+                { name: 'Geo', value: geoLabel, inline: false }
+            ],
+            footer: { text: 'NodeCast Security Audit' }
+        };
+
+        const response = await fetch(`https://discord.com/api/channels/${encodeURIComponent(channelId)}/messages`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bot ${botToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                embeds: [embed]
+            })
+        });
+
+        return response.ok;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function logDiscordLinkAudit(req, linkUser, discordUser) {
+    const ip = extractClientIp(req);
+    const userAgent = String(req.headers['user-agent'] || '').trim();
+    const geo = await lookupGeoByIp(ip);
+
+    const payload = {
+        event: 'discord_link_success',
+        timestamp: new Date().toISOString(),
+        siteUserId: linkUser?.id || null,
+        siteUsername: linkUser?.username || null,
+        discordId: String(discordUser?.id || '') || null,
+        discordUsername: discordUser?.username || null,
+        discordDisplayName: discordUser?.global_name || discordUser?.username || null,
+        ip: ip || null,
+        client: parseClientFromUserAgent(userAgent),
+        userAgent: userAgent || null,
+        geo
+    };
+
+    console.log('[DiscordLinkAudit]', JSON.stringify(payload));
+    await sendDiscordAuditLogToChannel(payload);
+}
+
 async function fetchDiscordGuildMember(discordUserId) {
     const guildId = getDiscordGuildId();
     const botToken = getDiscordBotToken();
@@ -217,17 +404,25 @@ async function sendDiscordLinkSuccessDm(discordUserId, lurkedTvUsername) {
         const dmChannel = await dmChannelResponse.json().catch(() => ({}));
         if (!dmChannelResponse.ok || !dmChannel?.id) return false;
 
-        const messageLines = [
-            'Your Discord account is now linked to LurkedTV.',
-            '',
-            `Account: ${lurkedTvUsername || 'Unknown user'}`,
-            '',
-            'You can now use bot commands:',
-            '• !download',
-            '• !status',
-            '• !recent',
-            '• !help'
-        ];
+        const embed = {
+            title: 'Discord Account Linked',
+            color: 0x3DD68C,
+            description: 'Your Discord account is now linked to LurkedTV.',
+            fields: [
+                {
+                    name: 'Account',
+                    value: lurkedTvUsername || 'Unknown user',
+                    inline: true
+                },
+                {
+                    name: 'Bot Commands',
+                    value: '!download  !status  !recent  !help',
+                    inline: false
+                }
+            ],
+            footer: { text: 'LurkedTV' },
+            timestamp: new Date().toISOString()
+        };
 
         const messageResponse = await fetch(`https://discord.com/api/channels/${encodeURIComponent(dmChannel.id)}/messages`, {
             method: 'POST',
@@ -236,10 +431,9 @@ async function sendDiscordLinkSuccessDm(discordUserId, lurkedTvUsername) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                content: messageLines.join('\n')
+                embeds: [embed]
             })
         });
-
         return messageResponse.ok;
     } catch (err) {
         console.warn('Failed to send Discord link success DM:', err.message);
@@ -359,6 +553,7 @@ router.get('/discord/callback', requireDiscordOauthEnabled, async (req, res) => 
             discordMemberStatus: await getDiscordMemberStatus(discordUser.id)
         });
 
+        await logDiscordLinkAudit(req, linkUser, discordUser);
         await sendDiscordLinkSuccessDm(discordUser.id, linkUser.username);
         res.redirect('/?discord=linked#settings');
     } catch (err) {

@@ -2,55 +2,64 @@ const fs = require('fs/promises');
 const path = require('path');
 const { existsSync, mkdirSync } = require('fs');
 
-// Ensure data directory exists (sync is fine for startup)
 const dataDir = path.join(__dirname, '..', 'data');
 if (!existsSync(dataDir)) {
   mkdirSync(dataDir, { recursive: true });
 }
 
 const dbPath = path.join(dataDir, 'db.json');
+const tmpPath = `${dbPath}.tmp`;
 
-// Initialize database structure
-async function loadDb() {
-  try {
-    // Check if file exists (using fs.access is better for async, but we can catch ENOENT)
+let dbState = null;
+let initPromise = null;
+let writeQueue = Promise.resolve();
+
+function createEmptyDb() {
+  return {
+    sources: [],
+    hiddenItems: [],
+    favorites: [],
+    settings: getDefaultSettings(),
+    users: [],
+    nextId: 1
+  };
+}
+
+function normalizeDb(data) {
+  const base = createEmptyDb();
+  if (!data || typeof data !== 'object') return base;
+  return {
+    sources: Array.isArray(data.sources) ? data.sources : base.sources,
+    hiddenItems: Array.isArray(data.hiddenItems) ? data.hiddenItems : base.hiddenItems,
+    favorites: Array.isArray(data.favorites) ? data.favorites : base.favorites,
+    settings: data.settings && typeof data.settings === 'object' ? data.settings : base.settings,
+    users: Array.isArray(data.users) ? data.users : base.users,
+    nextId: Number.isInteger(data.nextId) && data.nextId > 0 ? data.nextId : base.nextId
+  };
+}
+
+async function initializeDbState() {
+  if (dbState) return dbState;
+  if (initPromise) return initPromise;
+
+  initPromise = (async () => {
     try {
       const fileContent = await fs.readFile(dbPath, 'utf-8');
-      const data = JSON.parse(fileContent);
-      return {
-        sources: data.sources || [],
-        hiddenItems: data.hiddenItems || [],
-        favorites: data.favorites || [],
-        settings: data.settings || getDefaultSettings(),
-        users: data.users || [],
-        nextId: data.nextId || 1
-      };
+      dbState = normalizeDb(JSON.parse(fileContent));
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        // File doesn't exist, return default
-        return {
-          sources: [],
-          hiddenItems: [],
-          favorites: [],
-          settings: getDefaultSettings(),
-          users: [],
-          nextId: 1
-        };
+      if (error.code !== 'ENOENT') {
+        console.error('Error loading database:', error);
       }
-      throw error;
+      dbState = createEmptyDb();
     }
-  } catch (err) {
-    console.error('Error loading database:', err);
-    // Return safe default on error to prevent crashing, but log it
-    return {
-      sources: [],
-      hiddenItems: [],
-      favorites: [],
-      settings: getDefaultSettings(),
-      users: [],
-      nextId: 1
-    };
-  }
+    return dbState;
+  })();
+
+  return initPromise;
+}
+
+async function loadDb() {
+  return initializeDbState();
 }
 
 // Default settings
@@ -93,6 +102,7 @@ function getDefaultSettings() {
     discordBotPrefix: '!',
     discordGuildId: '1356477545964372048',
     discordAdminRoleId: '1356477545989799990',
+    discordLogChannelId: '',
     discordActiveWindowMs: 300000,
     discordCommandDedupeWindowMs: 15000
   };
@@ -164,23 +174,22 @@ function getUserAgent(settings) {
   return USER_AGENT_PRESETS[settings.userAgentPreset] || USER_AGENT_PRESETS.chrome;
 }
 
-// Write lock to prevent concurrent writes from corrupting db.json
-let writeQueue = Promise.resolve();
-const tmpPath = dbPath + '.tmp';
-
 async function saveDb(data) {
-  // Queue this write operation - each write waits for the previous one
+  if (!dbState) {
+    await initializeDbState();
+  }
+  if (data && data !== dbState) {
+    dbState = normalizeDb(data);
+  }
+
   writeQueue = writeQueue.then(async () => {
     try {
-      const jsonString = JSON.stringify(data, null, 2);
-      // Atomic write: write to temp file, then rename
-      // Rename is atomic on most filesystems, preventing corruption on crash
-      await fs.writeFile(tmpPath, jsonString);
+      const snapshot = JSON.stringify(dbState);
+      await fs.writeFile(tmpPath, snapshot, 'utf-8');
       await fs.rename(tmpPath, dbPath);
     } catch (err) {
       console.error('Error writing database:', err);
-      // Clean up temp file if it exists
-      try { await fs.unlink(tmpPath); } catch { /* ignore */ }
+      try { await fs.unlink(tmpPath); } catch {}
       throw err;
     }
   }).catch(err => {

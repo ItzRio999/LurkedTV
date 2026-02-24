@@ -42,6 +42,7 @@ async function getEffectiveDiscordBotConfig() {
         prefix: toSafeString(s.discordBotPrefix, process.env.DISCORD_BOT_PREFIX || '!'),
         guildId: toSafeString(s.discordGuildId, process.env.DISCORD_GUILD_ID || process.env.DISCORD_SERVER_ID || '1356477545964372048'),
         adminRoleId: toSafeString(s.discordAdminRoleId, process.env.DISCORD_ADMIN_ROLE_ID || '1356477545989799990'),
+        logChannelId: toSafeString(s.discordLogChannelId, ''),
         activeWindowMs: toSafeInt(s.discordActiveWindowMs, Number(process.env.NODECAST_ACTIVE_WINDOW_MS || 300000)),
         commandDedupeWindowMs: toSafeInt(s.discordCommandDedupeWindowMs, Number(process.env.DISCORD_COMMAND_DEDUPE_WINDOW_MS || 15000))
     };
@@ -304,6 +305,7 @@ router.put('/discord-bot/config', auth.requireAuth, auth.requireAdmin, async (re
         if (req.body?.prefix !== undefined) updates.discordBotPrefix = toSafeString(req.body.prefix, '!').slice(0, 3);
         if (req.body?.guildId !== undefined) updates.discordGuildId = toSafeString(req.body.guildId, '');
         if (req.body?.adminRoleId !== undefined) updates.discordAdminRoleId = toSafeString(req.body.adminRoleId, '');
+        if (req.body?.logChannelId !== undefined) updates.discordLogChannelId = toSafeString(req.body.logChannelId, '');
         if (req.body?.activeWindowMs !== undefined) updates.discordActiveWindowMs = toSafeInt(req.body.activeWindowMs, 300000);
         if (req.body?.commandDedupeWindowMs !== undefined) updates.discordCommandDedupeWindowMs = toSafeInt(req.body.commandDedupeWindowMs, 15000);
 

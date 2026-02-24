@@ -19,6 +19,10 @@ function getDb() {
         // Optimize performance
         db.pragma('journal_mode = WAL');
         db.pragma('synchronous = NORMAL');
+        db.pragma('temp_store = MEMORY');
+        db.pragma('cache_size = -16000');
+        db.pragma('mmap_size = 268435456');
+        db.pragma('busy_timeout = 5000');
         initSchema();
     }
     return db;
@@ -40,6 +44,7 @@ function initSchema() {
             data JSON -- Extra provider data
         );
         CREATE INDEX IF NOT EXISTS idx_categories_source_type ON categories(source_id, type);
+        CREATE INDEX IF NOT EXISTS idx_categories_source_type_hidden ON categories(source_id, type, is_hidden);
     `);
 
     // Playlist Items (Channels, Movies, Series, Episodes)
@@ -71,6 +76,8 @@ function initSchema() {
         );
         CREATE INDEX IF NOT EXISTS idx_items_source_type ON playlist_items(source_id, type);
         CREATE INDEX IF NOT EXISTS idx_items_category ON playlist_items(source_id, category_id);
+        CREATE INDEX IF NOT EXISTS idx_items_source_type_hidden_cat ON playlist_items(source_id, type, is_hidden, category_id);
+        CREATE INDEX IF NOT EXISTS idx_items_type_hidden_added ON playlist_items(type, is_hidden, added_at DESC);
     `);
 
     // EPG Programs
@@ -133,6 +140,7 @@ function initSchema() {
         );
         CREATE INDEX IF NOT EXISTS idx_history_user_updated ON watch_history(user_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_history_user_item ON watch_history(user_id, item_id);
+        CREATE INDEX IF NOT EXISTS idx_history_user_source_type_item ON watch_history(user_id, source_id, item_type, item_id, updated_at DESC);
     `);
 
     // Migration: Add source_id column if missing (for existing databases)

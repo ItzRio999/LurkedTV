@@ -54,6 +54,7 @@ class SettingsPage {
                 prefix: document.getElementById('discord-bot-prefix')?.value || '!',
                 guildId: document.getElementById('discord-bot-guild-id')?.value || '',
                 adminRoleId: document.getElementById('discord-bot-admin-role-id')?.value || '',
+                logChannelId: document.getElementById('discord-bot-log-channel-id')?.value || '',
                 activeWindowMs: Number(document.getElementById('discord-bot-active-window-ms')?.value || 300000),
                 commandDedupeWindowMs: Number(document.getElementById('discord-bot-dedupe-window-ms')?.value || 15000)
             };
@@ -109,11 +110,13 @@ class SettingsPage {
                 const prefixInput = document.getElementById('discord-bot-prefix');
                 const guildInput = document.getElementById('discord-bot-guild-id');
                 const roleInput = document.getElementById('discord-bot-admin-role-id');
+                const logChannelInput = document.getElementById('discord-bot-log-channel-id');
                 const activeInput = document.getElementById('discord-bot-active-window-ms');
                 const dedupeInput = document.getElementById('discord-bot-dedupe-window-ms');
                 if (prefixInput) prefixInput.value = config.prefix || '!';
                 if (guildInput) guildInput.value = config.guildId || '';
                 if (roleInput) roleInput.value = config.adminRoleId || '';
+                if (logChannelInput) logChannelInput.value = config.logChannelId || '';
                 if (activeInput) activeInput.value = Number(config.activeWindowMs || 300000);
                 if (dedupeInput) dedupeInput.value = Number(config.commandDedupeWindowMs || 15000);
                 this.discordBotConfigLoaded = true;
@@ -155,7 +158,7 @@ class SettingsPage {
             );
 
             if (feedback) {
-                feedback.textContent = `Config prefix ${config.prefix || '!'} | Guild ${config.guildId || 'unset'} | Role ${config.adminRoleId || 'unset'}`;
+                feedback.textContent = `Config prefix ${config.prefix || '!'} | Guild ${config.guildId || 'unset'} | Role ${config.adminRoleId || 'unset'} | Log channel ${config.logChannelId || 'unset'}`;
             }
         } catch (err) {
             console.error('Failed to load Discord bot status:', err);
