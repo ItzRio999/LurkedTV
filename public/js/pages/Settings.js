@@ -98,6 +98,19 @@ class SettingsPage {
         return `${Math.floor(ms / 60000)}m`;
     }
 
+    formatDuration(ms) {
+        if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+        const totalSeconds = Math.floor(ms / 1000);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        if (minutes > 0) return `${minutes}m ${seconds}s`;
+        return `${seconds}s`;
+    }
+
     async loadDiscordBotStatus(showToastOnError = false) {
         const feedback = document.getElementById('discord-bot-status-feedback');
         try {
@@ -128,6 +141,16 @@ class SettingsPage {
                     ? `Online (${this.formatAge(heartbeat.ageMs)} ago)`
                     : (heartbeat.lastSeenAt ? `Offline (${this.formatAge(heartbeat.ageMs)} ago)` : 'No heartbeat yet'),
                 heartbeat.online
+            );
+
+            const uptimeMs = Number(heartbeat.uptimeMs || 0);
+            const uptimeText = uptimeMs > 0
+                ? this.formatDuration(uptimeMs)
+                : (heartbeat.lastSeenAt ? 'Unknown (not reported)' : 'No data yet');
+            this.setDiscordBotStatusText(
+                'discord-bot-uptime-status',
+                uptimeText,
+                heartbeat.online ? true : null
             );
 
             const identityOk = !!monitor?.botIdentity?.ok;
@@ -163,6 +186,7 @@ class SettingsPage {
         } catch (err) {
             console.error('Failed to load Discord bot status:', err);
             this.setDiscordBotStatusText('discord-bot-heartbeat-status', 'Unavailable', false);
+            this.setDiscordBotStatusText('discord-bot-uptime-status', 'Unavailable', false);
             this.setDiscordBotStatusText('discord-bot-identity-status', 'Unavailable', false);
             this.setDiscordBotStatusText('discord-bot-guild-status', 'Unavailable', false);
             this.setDiscordBotStatusText('discord-bot-role-status', 'Unavailable', false);
@@ -813,9 +837,10 @@ async loadHardwareInfo() {
                 const username = document.getElementById('new-username').value;
                 const password = document.getElementById('new-password').value;
                 const role = document.getElementById('new-role').value;
+                const premium = document.getElementById('new-premium')?.checked === true;
 
                 try {
-                    await API.users.create({ username, password, role });
+                    await API.users.create({ username, password, role, premium });
                     alert('User created successfully!');
                     addUserForm.reset();
                     this.loadUsers();
@@ -852,6 +877,7 @@ async loadHardwareInfo() {
 
     async loadUsers() {
         const userList = document.getElementById('user-list');
+        const premiumUserList = document.getElementById('premium-user-list');
         if (!userList) return;
 
         try {
@@ -860,7 +886,8 @@ async loadHardwareInfo() {
             this.users = users;
 
             if (users.length === 0) {
-                userList.innerHTML = '<tr><td colspan="5" class="hint">No users found</td></tr>';
+                userList.innerHTML = '<tr><td colspan="6" class="hint">No users found</td></tr>';
+                if (premiumUserList) premiumUserList.innerHTML = '<tr><td colspan="4" class="hint">No users found</td></tr>';
                 return;
             }
 
@@ -873,6 +900,9 @@ async loadHardwareInfo() {
                 const roleBadge = user.role === 'admin'
                     ? '<span class="user-badge user-badge-admin">Admin</span>'
                     : '<span class="user-badge user-badge-viewer">Viewer</span>';
+                const premiumBadge = user.premium
+                    ? '<span class="user-badge user-badge-admin">Premium</span>'
+                    : '<span class="user-badge user-badge-viewer">Standard</span>';
 
                 return `
                 <tr>
@@ -884,6 +914,7 @@ async loadHardwareInfo() {
                     </td>
                     <td>${user.email || '<span class="hint">-</span>'}</td>
                     <td>${roleBadge}</td>
+                    <td>${premiumBadge}</td>
                     <td>${user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}</td>
                     <td>
                         <button class="btn btn-sm btn-secondary" onclick="window.app.pages.settings.openEditUserModal(${user.id})">Edit</button>
@@ -891,9 +922,40 @@ async loadHardwareInfo() {
                     </td>
                 </tr>
             `}).join('');
+
+            if (premiumUserList) {
+                premiumUserList.innerHTML = users.map(user => {
+                    const premiumLabel = user.premium
+                        ? '<span class="user-badge user-badge-admin">Active</span>'
+                        : '<span class="user-badge user-badge-viewer">Inactive</span>';
+                    const actionLabel = user.premium ? 'Revoke Premium' : 'Grant Premium';
+                    const actionClass = user.premium ? 'btn-error' : 'btn-primary';
+
+                    return `
+                    <tr>
+                        <td><strong>${user.username}</strong></td>
+                        <td>${user.email || '<span class="hint">-</span>'}</td>
+                        <td>${premiumLabel}</td>
+                        <td>
+                            <button class="btn btn-sm ${actionClass}" onclick="window.app.pages.settings.setPremium(${user.id}, ${user.premium ? 'false' : 'true'})">${actionLabel}</button>
+                        </td>
+                    </tr>
+                    `;
+                }).join('');
+            }
         } catch (err) {
             console.error('Error loading users:', err);
-            userList.innerHTML = '<tr><td colspan="5" class="hint">Error loading users</td></tr>';
+            userList.innerHTML = '<tr><td colspan="6" class="hint">Error loading users</td></tr>';
+            if (premiumUserList) premiumUserList.innerHTML = '<tr><td colspan="4" class="hint">Error loading users</td></tr>';
+        }
+    }
+
+    async setPremium(userId, premiumEnabled) {
+        try {
+            await API.users.update(userId, { premium: premiumEnabled === true });
+            this.loadUsers();
+        } catch (err) {
+            alert('Error updating premium access: ' + err.message);
         }
     }
 
@@ -926,14 +988,16 @@ async loadHardwareInfo() {
             const editUsername = document.getElementById('edit-username');
             const editEmail = document.getElementById('edit-email');
             const editRole = document.getElementById('edit-role');
+            const editPremium = document.getElementById('edit-premium');
             const editPassword = document.getElementById('edit-password');
 
-            console.log('Form elements found:', { editId, editUsername, editEmail, editRole, editPassword });
+            console.log('Form elements found:', { editId, editUsername, editEmail, editRole, editPremium, editPassword });
 
             if (editId) editId.value = user.id;
             if (editUsername) editUsername.value = user.username;
             if (editEmail) editEmail.value = user.email || '';
             if (editRole) editRole.value = user.role;
+            if (editPremium) editPremium.checked = user.premium === true;
             if (editPassword) editPassword.value = '';
 
             // Handle SSO specific UI
@@ -994,7 +1058,8 @@ async loadHardwareInfo() {
             const userId = document.getElementById('edit-user-id').value;
             const updates = {
                 username: document.getElementById('edit-username').value,
-                role: document.getElementById('edit-role').value
+                role: document.getElementById('edit-role').value,
+                premium: document.getElementById('edit-premium')?.checked === true
             };
 
             const newPassword = document.getElementById('edit-password').value;

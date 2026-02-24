@@ -388,9 +388,12 @@ class SourceManager {
     /**
      * Refresh source data
      */
-    async refreshSource(id, type) {
+    async refreshSource(id, type, options = {}) {
+        const showSuccessAlert = options.showSuccessAlert !== false;
+        const promptLargeM3uWarning = options.promptLargeM3uWarning !== false;
+        const rethrowErrors = options.rethrowErrors === true;
+        const btn = document.querySelector(`.source-item[data-id="${id}"] [data-action="refresh"]`);
         try {
-            const btn = document.querySelector(`.source-item[data-id="${id}"] [data-action="refresh"]`);
             if (btn) {
                 btn.disabled = true;
                 const icon = btn.querySelector('.icon');
@@ -398,7 +401,7 @@ class SourceManager {
             }
 
             // Check M3U size before syncing (large playlist warning)
-            if (type === 'm3u') {
+            if (type === 'm3u' && promptLargeM3uWarning) {
                 try {
                     const estimate = await API.sources.estimate(id);
                     if (estimate.needsWarning) {
@@ -462,30 +465,72 @@ class SourceManager {
                 if (window.app?.epgGuide) {
                     await window.app.epgGuide.loadEpg(true);
                 }
-                alert('EPG data synced & refreshed!');
+                if (showSuccessAlert) alert('EPG data synced & refreshed!');
             } else if (type === 'xtream') {
                 // Re-fetch xtream data by reloading channels
                 if (window.app?.channelList) {
                     await window.app.channelList.loadChannels();
                 }
-                alert('Xtream data synced & refreshed!');
+                if (showSuccessAlert) alert('Xtream data synced & refreshed!');
             } else if (type === 'm3u') {
                 // Re-fetch M3U data by reloading channels
                 if (window.app?.channelList) {
                     await window.app.channelList.loadChannels();
                 }
-                alert('M3U playlist synced & refreshed!');
+                if (showSuccessAlert) alert('M3U playlist synced & refreshed!');
             }
-
+        } catch (err) {
+            console.error('Error refreshing source:', err);
+            alert('Refresh failed: ' + err.message);
+            if (rethrowErrors) throw err;
+        } finally {
             if (btn) {
                 btn.disabled = false;
                 const icon = btn.querySelector('.icon');
                 if (icon) icon.classList.remove('spin');
             }
-        } catch (err) {
-            console.error('Error refreshing source:', err);
-            alert('Refresh failed: ' + err.message);
         }
+    }
+
+    async masterReloadAllContent() {
+        const sources = await API.sources.getAll();
+        const enabledSources = sources.filter(source => source.enabled);
+
+        if (enabledSources.length === 0) {
+            alert('No enabled sources found to reload.');
+            return;
+        }
+
+        const failures = [];
+        for (const source of enabledSources) {
+            try {
+                await this.refreshSource(source.id, source.type, {
+                    showSuccessAlert: false,
+                    promptLargeM3uWarning: false,
+                    rethrowErrors: true
+                });
+            } catch (err) {
+                failures.push({
+                    name: source.name,
+                    error: err?.message || 'Unknown error'
+                });
+            }
+        }
+
+        if (failures.length === 0) {
+            alert(`Master Reload completed. Reloaded ${enabledSources.length} source(s).`);
+            return;
+        }
+
+        const failSummary = failures
+            .map((f) => `- ${f.name}: ${f.error}`)
+            .join('\n');
+        alert(
+            `Master Reload finished with issues.\n` +
+            `Succeeded: ${enabledSources.length - failures.length}\n` +
+            `Failed: ${failures.length}\n\n` +
+            `${failSummary}`
+        );
     }
 
     /**

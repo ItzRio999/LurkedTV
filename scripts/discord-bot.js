@@ -1040,6 +1040,16 @@ function buildHelpEmbed() {
                 inline: false,
             },
             {
+                name: `${EMOJI.gear} \`${prefix}makepremium <user>\``,
+                value: `Grant premium access by username, user ID, or Discord mention.\nAliases: \`${prefix}addpremium\`, \`${prefix}mp\``,
+                inline: false,
+            },
+            {
+                name: `${EMOJI.gear} \`${prefix}revokepremium <user>\``,
+                value: `Revoke premium access by username, user ID, or Discord mention.\nAliases: \`${prefix}removepremium\`, \`${prefix}rmp\`, \`${prefix}unpremium\``,
+                inline: false,
+            },
+            {
                 name: `${EMOJI.ping} \`${prefix}ping\``,
                 value: `Check bot response latency.\nAliases: \`${prefix}latency\``,
                 inline: false,
@@ -1659,6 +1669,93 @@ async function handleMakeAdminCommand(message, rawTarget) {
     });
 }
 
+async function handleSetPremiumCommand(message, rawTarget, premiumEnabled) {
+    const targetRaw = sanitizeEmbedText(rawTarget, '');
+    if (!targetRaw) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} Missing Target User`,
+                    description: `Usage: \`${prefix}${premiumEnabled ? 'makepremium' : 'revokepremium'} <username|userId|@discordUser>\``,
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const isDiscordAdmin = Boolean(
+        message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+        message.member?.permissions?.has(PermissionsBitField.Flags.ManageGuild)
+    );
+    if (!isDiscordAdmin) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.error} Permission Required`,
+                    description: 'You need **Administrator** or **Manage Server** permission to run this command.',
+                    color: COLORS.error,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const token = await getNodecastTokenForDiscordUser(message.author.id);
+    const users = await apiGet('/api/auth/users', token);
+    if (!Array.isArray(users) || users.length === 0) {
+        throw new Error('No users were returned by the API.');
+    }
+
+    const mentionId = parseDiscordMentionUserId(targetRaw);
+    const targetIdRaw = mentionId || targetRaw;
+    const targetLower = targetRaw.toLowerCase();
+
+    const targetUser = users.find((u) =>
+        String(u?.id || '') === targetIdRaw ||
+        String(u?.discordId || '') === targetIdRaw ||
+        String(u?.username || '').toLowerCase() === targetLower
+    );
+
+    if (!targetUser) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} User Not Found`,
+                    description: `Could not find user \`${targetRaw}\`. Try username, Nodecast user ID, or Discord mention.`,
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    if (Boolean(targetUser.premium) === premiumEnabled) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.info} No Change`,
+                    description: `**${targetUser.username || `User ${targetUser.id}`}** is already ${premiumEnabled ? 'premium' : 'non-premium'}.`,
+                    color: COLORS.info,
+                }),
+            ],
+        });
+        return;
+    }
+
+    await apiPut(`/api/auth/users/${encodeURIComponent(String(targetUser.id))}`, token, { premium: premiumEnabled });
+    await message.reply({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.success} Premium Updated`,
+                description: `${premiumEnabled ? 'Granted' : 'Revoked'} premium for **${targetUser.username || `User ${targetUser.id}`}**.`,
+                color: COLORS.success,
+                footer: `Requested by ${message.author.username}`,
+            }),
+        ],
+    });
+}
+
 async function syncRuntimeConfigFromServer() {
     if (!NODECAST_DISCORD_AUTH_SECRET) return;
     try {
@@ -1676,10 +1773,15 @@ async function syncRuntimeConfigFromServer() {
 async function sendHeartbeat() {
     if (!NODECAST_DISCORD_AUTH_SECRET) return;
     try {
+        const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1000));
         await fetch(`${API_BASE_URL}/api/settings/discord-bot/heartbeat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-bot-auth': NODECAST_DISCORD_AUTH_SECRET },
-            body: JSON.stringify({ botTag: client.user?.tag || '', guildCount: client.guilds?.cache?.size || 0 })
+            body: JSON.stringify({
+                botTag: client.user?.tag || '',
+                guildCount: client.guilds?.cache?.size || 0,
+                uptimeMs
+            })
         });
     } catch (_) {}
 }
@@ -1734,6 +1836,8 @@ client.on('messageCreate', async (message) => {
         'clear',
         'prefix', 'setprefix',
         'makeadmin', 'addadmin', 'promoteadmin',
+        'makepremium', 'addpremium', 'mp',
+        'revokepremium', 'removepremium', 'rmp', 'unpremium',
         'ping', 'latency',
         'help', 'commands', 'cmds',
         '',
@@ -1758,6 +1862,14 @@ client.on('messageCreate', async (message) => {
         if (command === 'prefix' || command === 'setprefix') { await handlePrefixCommand(message, args[0]); return; }
         if (command === 'makeadmin' || command === 'addadmin' || command === 'promoteadmin') {
             await handleMakeAdminCommand(message, args.join(' '));
+            return;
+        }
+        if (command === 'makepremium' || command === 'addpremium' || command === 'mp') {
+            await handleSetPremiumCommand(message, args.join(' '), true);
+            return;
+        }
+        if (command === 'revokepremium' || command === 'removepremium' || command === 'rmp' || command === 'unpremium') {
+            await handleSetPremiumCommand(message, args.join(' '), false);
             return;
         }
 

@@ -8,7 +8,8 @@ const firebaseCacheSync = require('../services/firebaseCacheSync');
 let discordBotHeartbeat = {
     lastSeenAt: 0,
     botTag: '',
-    guildCount: 0
+    guildCount: 0,
+    uptimeMs: 0
 };
 
 function getDiscordBotAuthSecret() {
@@ -271,6 +272,10 @@ router.get('/discord-bot/status', auth.requireAuth, auth.requireAdmin, async (re
         const now = Date.now();
         const heartbeatAgeMs = discordBotHeartbeat.lastSeenAt ? (now - discordBotHeartbeat.lastSeenAt) : null;
         const heartbeatOnline = heartbeatAgeMs !== null && heartbeatAgeMs < 90_000;
+        const lastReportedUptimeMs = Number(discordBotHeartbeat.uptimeMs || 0);
+        const estimatedUptimeMs = heartbeatOnline
+            ? Math.max(0, lastReportedUptimeMs + Math.max(0, Number(heartbeatAgeMs || 0)))
+            : lastReportedUptimeMs;
 
         return res.json({
             config,
@@ -285,7 +290,8 @@ router.get('/discord-bot/status', auth.requireAuth, auth.requireAdmin, async (re
                     lastSeenAt: discordBotHeartbeat.lastSeenAt || null,
                     ageMs: heartbeatAgeMs,
                     botTag: discordBotHeartbeat.botTag || '',
-                    guildCount: discordBotHeartbeat.guildCount || 0
+                    guildCount: discordBotHeartbeat.guildCount || 0,
+                    uptimeMs: estimatedUptimeMs
                 }
             }
         });
@@ -344,7 +350,8 @@ router.post('/discord-bot/heartbeat', requireDiscordBotAuth, (req, res) => {
     discordBotHeartbeat = {
         lastSeenAt: Date.now(),
         botTag: toSafeString(req.body?.botTag, ''),
-        guildCount: toSafeInt(req.body?.guildCount, 0)
+        guildCount: toSafeInt(req.body?.guildCount, 0),
+        uptimeMs: toSafeInt(req.body?.uptimeMs, 0)
     };
     res.json({ success: true, ts: discordBotHeartbeat.lastSeenAt });
 });

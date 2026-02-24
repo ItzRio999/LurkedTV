@@ -595,6 +595,7 @@ router.post('/discord/bot-token', async (req, res) => {
                 id: user.id,
                 username: user.username,
                 role: user.role,
+                premium: user.premium === true,
                 email: user.email || null
             }
         });
@@ -721,6 +722,7 @@ router.post('/firebase', async (req, res) => {
                 id: user.id,
                 username: user.username,
                 role: user.role,
+                premium: user.premium === true,
                 email: user.email,
                 defaultLanguage: user.defaultLanguage || '',
                 emailVerified: true
@@ -768,6 +770,7 @@ router.get('/me', auth.requireAuth, async (req, res) => {
             id: user.id,
             username: user.username,
             role: user.role,
+            premium: user.premium === true,
             email: user.email || null,
             defaultLanguage: user.defaultLanguage || '',
             emailVerified: !!user.firebaseUid,
@@ -809,6 +812,7 @@ router.patch('/me/preferences', auth.requireAuth, async (req, res) => {
             id: user.id,
             username: user.username,
             role: user.role,
+            premium: user.premium === true,
             email: user.email || null,
             defaultLanguage: user.defaultLanguage || '',
             emailVerified: !!user.firebaseUid,
@@ -854,6 +858,7 @@ router.post('/me/change-username', auth.requireAuth, async (req, res) => {
                 id: currentUser.id,
                 username: currentUser.username,
                 role: currentUser.role,
+                premium: currentUser.premium === true,
                 email: currentUser.email || null,
                 defaultLanguage: currentUser.defaultLanguage || '',
                 emailVerified: !!currentUser.firebaseUid,
@@ -878,6 +883,7 @@ router.post('/me/change-username', auth.requireAuth, async (req, res) => {
             id: updatedUser.id,
             username: updatedUser.username,
             role: updatedUser.role,
+            premium: updatedUser.premium === true,
             email: updatedUser.email || null,
             defaultLanguage: updatedUser.defaultLanguage || '',
             emailVerified: !!updatedUser.firebaseUid,
@@ -974,7 +980,7 @@ router.get('/users', auth.requireAuth, requireDashboardAdmin, async (req, res) =
  */
 router.post('/users', auth.requireAuth, requireDashboardAdmin, async (req, res) => {
     try {
-        const { username, password, role } = req.body;
+        const { username, password, role, premium } = req.body;
 
         if (!username || !password || !role) {
             return res.status(400).json({ error: 'Username, password, and role are required' });
@@ -992,7 +998,8 @@ router.post('/users', auth.requireAuth, requireDashboardAdmin, async (req, res) 
         const newUser = await db.users.create({
             username,
             passwordHash,
-            role
+            role,
+            premium: premium === true
         });
 
         res.status(201).json(newUser);
@@ -1009,7 +1016,7 @@ router.post('/users', auth.requireAuth, requireDashboardAdmin, async (req, res) 
 router.put('/users/:id', auth.requireAuth, requireDashboardAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { username, password, role } = req.body;
+        const { username, password, role, premium } = req.body;
 
         const updates = {};
 
@@ -1040,6 +1047,10 @@ router.put('/users/:id', auth.requireAuth, requireDashboardAdmin, async (req, re
             }
 
             updates.role = role;
+        }
+
+        if (premium !== undefined) {
+            updates.premium = premium === true;
         }
 
         const updatedUser = await db.users.update(id, updates);

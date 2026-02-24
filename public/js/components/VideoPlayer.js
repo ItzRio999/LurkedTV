@@ -482,6 +482,11 @@ class VideoPlayer {
      * Copy current stream URL to clipboard
      */
     copyStreamUrl() {
+        if (!window.app?.currentUser?.premium) {
+            alert('Premium required: Copy Stream URL is a premium feature.');
+            return;
+        }
+
         if (!this.currentUrl) {
             console.warn('[Player] No stream URL to copy');
             return;

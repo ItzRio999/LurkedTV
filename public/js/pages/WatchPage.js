@@ -1060,6 +1060,11 @@ class WatchPage {
      * Copy current stream URL to clipboard
      */
     copyStreamUrl() {
+        if (!this.app?.currentUser?.premium) {
+            alert('Premium required: Copy Stream URL is a premium feature.');
+            return;
+        }
+
         if (!this.currentUrl) {
             console.warn('[WatchPage] No stream URL to copy');
             return;

@@ -59,6 +59,10 @@
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg></span>
           <span>Series</span>
         </a>
+        <a href="#" class="nav-link" id="master-reload-btn">
+          <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M17.65 6.35A7.95 7.95 0 0012 4V1L7 6l5 5V7a5 5 0 11-5 5H5a7 7 0 107-7c1.93 0 3.68.78 4.95 2.05L17.65 6.35z"/></svg></span>
+          <span>Master Reload</span>
+        </a>
       </div>
 
       <!-- Right: Search + Profile + Mobile hamburger -->
@@ -126,6 +130,10 @@
         <a href="#" class="nav-link" data-page="settings">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L3.16 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.58 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></span>
           <span>Settings</span>
+        </a>
+        <a href="#" class="nav-link" id="mobile-master-reload-btn">
+          <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M17.65 6.35A7.95 7.95 0 0012 4V1L7 6l5 5V7a5 5 0 11-5 5H5a7 7 0 107-7c1.93 0 3.68.78 4.95 2.05L17.65 6.35z"/></svg></span>
+          <span>Master Reload</span>
         </a>
         <a href="#" class="nav-link nav-link--danger" id="mobile-logout-btn">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg></span>
@@ -1057,6 +1065,10 @@ Can increase server bandwidth and CPU usage.">?</button>
                     <span class="setting-hint" id="discord-bot-heartbeat-status">Unknown</span>
                   </div>
                   <div class="discord-bot-monitor-item">
+                    <span class="setting-label">Uptime</span>
+                    <span class="setting-hint" id="discord-bot-uptime-status">Unknown</span>
+                  </div>
+                  <div class="discord-bot-monitor-item">
                     <span class="setting-label">Bot Identity</span>
                     <span class="setting-hint" id="discord-bot-identity-status">Unknown</span>
                   </div>
@@ -1118,13 +1130,14 @@ Can increase server bandwidth and CPU usage.">?</button>
                       <th>Username</th>
                       <th>Email</th>
                       <th>Role</th>
+                      <th>Premium</th>
                       <th>Created</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody id="user-list">
                     <tr>
-                      <td colspan="4" class="hint">Loading users...</td>
+                      <td colspan="6" class="hint">Loading users...</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1148,8 +1161,37 @@ Can increase server bandwidth and CPU usage.">?</button>
                       <option value="admin">Admin</option>
                     </select>
                   </div>
+                  <div class="form-group" style="justify-content:flex-end;">
+                    <label for="new-premium" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                      <input type="checkbox" id="new-premium" name="premium">
+                      Grant Premium
+                    </label>
+                  </div>
                   <button type="submit" class="btn btn-primary">Add User</button>
                 </form>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Premium Management</h3>
+              <p class="hint">Grant or revoke premium access for existing users.</p>
+
+              <div class="user-list-container">
+                <table class="user-table">
+                  <thead>
+                    <tr>
+                      <th>Username</th>
+                      <th>Email</th>
+                      <th>Premium</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="premium-user-list">
+                    <tr>
+                      <td colspan="4" class="hint">Loading users...</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -1380,6 +1422,20 @@ Can increase server bandwidth and CPU usage.">?</button>
         <span id="app-global-loading-text">Loading...</span>
       </div>
     </div>
+    <div id="premium-gate-popup" class="app-global-loading hidden" aria-live="polite" aria-busy="false">
+      <div class="app-global-loading-card premium-gate-card">
+        <img src="/img/LurkedTV.png" alt="LurkedTV logo" class="premium-gate-logo" loading="lazy">
+        <div class="premium-gate-header">
+          <div class="premium-gate-copy">
+            <div class="premium-gate-title">Premium Required</div>
+            <p id="premium-gate-text" class="premium-gate-text">
+              Master Reload is a premium feature.
+            </p>
+          </div>
+        </div>
+        <button type="button" id="premium-gate-close-btn" class="btn btn-primary">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- Modal Template -->
@@ -1434,6 +1490,13 @@ Can increase server bandwidth and CPU usage.">?</button>
               <option value="viewer">Viewer</option>
               <option value="admin">Admin</option>
             </select>
+          </div>
+
+          <div class="modal-form-group">
+            <label for="edit-premium" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="edit-premium" name="premium">
+              Premium Access
+            </label>
           </div>
 
           <div class="modal-form-group">

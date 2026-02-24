@@ -451,39 +451,47 @@ const settings = {
 
 // User operations
 const users = {
+  normalizeUser(user) {
+    if (!user || typeof user !== 'object') return user;
+    return {
+      ...user,
+      premium: user.premium === true
+    };
+  },
+
   async getAll() {
     const db = await loadDb();
-    return db.users || [];
+    return (db.users || []).map(u => users.normalizeUser(u));
   },
 
   async getById(id) {
     const db = await loadDb();
-    return db.users?.find(u => u.id === parseInt(id));
+    return users.normalizeUser(db.users?.find(u => u.id === parseInt(id)));
   },
 
   async getByUsername(username) {
     const db = await loadDb();
-    return db.users?.find(u => u.username === username);
+    return users.normalizeUser(db.users?.find(u => u.username === username));
   },
 
   async getByOidcId(oidcId) {
     const db = await loadDb();
-    return db.users?.find(u => u.oidcId === oidcId);
+    return users.normalizeUser(db.users?.find(u => u.oidcId === oidcId));
   },
 
   async getByEmail(email) {
     const db = await loadDb();
-    return db.users?.find(u => u.email === email);
+    return users.normalizeUser(db.users?.find(u => u.email === email));
   },
 
   async getByFirebaseUid(firebaseUid) {
     const db = await loadDb();
-    return db.users?.find(u => u.firebaseUid === firebaseUid);
+    return users.normalizeUser(db.users?.find(u => u.firebaseUid === firebaseUid));
   },
 
   async getByDiscordId(discordId) {
     const db = await loadDb();
-    return db.users?.find(u => String(u.discordId || '') === String(discordId || ''));
+    return users.normalizeUser(db.users?.find(u => String(u.discordId || '') === String(discordId || '')));
   },
 
   async create(userData) {
@@ -507,6 +515,7 @@ const users = {
       firebaseUid: userData.firebaseUid || null,
       discordId: userData.discordId || null,
       email: userData.email || null,
+      premium: userData.premium === true,
       defaultLanguage: userData.defaultLanguage || '',
       createdAt: new Date().toISOString()
     };
@@ -515,7 +524,7 @@ const users = {
     await saveDb(db);
 
     // Return user without password hash
-    const { passwordHash, ...userWithoutPassword } = newUser;
+    const { passwordHash, ...userWithoutPassword } = users.normalizeUser(newUser);
     return userWithoutPassword;
   },
 
@@ -543,7 +552,7 @@ const users = {
     await saveDb(db);
 
     // Return user without password hash
-    const { passwordHash, ...userWithoutPassword } = db.users[userIndex];
+    const { passwordHash, ...userWithoutPassword } = users.normalizeUser(db.users[userIndex]);
     return userWithoutPassword;
   },
 

@@ -11,6 +11,9 @@ class App {
         this.globalLoadingEl = document.getElementById('app-global-loading');
         this.globalLoadingTextEl = document.getElementById('app-global-loading-text');
         this.globalLoadingCount = 0;
+        this.premiumGatePopupEl = document.getElementById('premium-gate-popup');
+        this.premiumGateTextEl = document.getElementById('premium-gate-text');
+        this.masterReloadInProgress = false;
 
         // Initialize components
         this.player = new VideoPlayer();
@@ -129,6 +132,8 @@ class App {
         }
 
         this.setupGlobalSearch();
+        this.setupMasterReloadButtons();
+        this.setupPremiumGatePopup();
 
         // Toggle groups button
         document.getElementById('toggle-groups').addEventListener('click', () => {
@@ -442,6 +447,7 @@ class App {
         const displayEmail = document.getElementById('profile-display-email');
         const profileBtn = document.getElementById('profile-btn');
         const avatarEl = document.getElementById('profile-avatar');
+        this.updateMasterReloadAccess(user);
         if (!profileBtn) return;
 
         if (displayName) displayName.textContent = user?.username || user?.email || 'User';
@@ -473,6 +479,90 @@ class App {
         };
 
         avatarEl.src = avatarUrl;
+    }
+
+    setupMasterReloadButtons() {
+        const masterReloadBtns = [
+            document.getElementById('master-reload-btn'),
+            document.getElementById('mobile-master-reload-btn')
+        ].filter(Boolean);
+
+        masterReloadBtns.forEach((btn) => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                await this.handleMasterReload();
+            });
+        });
+
+        this.updateMasterReloadAccess();
+    }
+
+    updateMasterReloadAccess(user = this.currentUser) {
+        const isPremium = user?.premium === true;
+        const masterReloadBtns = [
+            document.getElementById('master-reload-btn'),
+            document.getElementById('mobile-master-reload-btn')
+        ].filter(Boolean);
+
+        masterReloadBtns.forEach((btn) => {
+            btn.title = isPremium
+                ? 'Reload all enabled sources and refresh content'
+                : 'Premium required';
+            btn.setAttribute('aria-disabled', isPremium ? 'false' : 'true');
+        });
+    }
+
+    async handleMasterReload() {
+        if (this.currentUser?.premium !== true) {
+            this.showPremiumGatePopup('Master Reload is a premium feature.');
+            return;
+        }
+
+        if (this.masterReloadInProgress) {
+            alert('Master Reload is already running.');
+            return;
+        }
+
+        if (!confirm('Reload all enabled sources now? This may take a while.')) {
+            return;
+        }
+
+        try {
+            this.masterReloadInProgress = true;
+            await this.withGlobalLoading(async () => {
+                await this.sourceManager.masterReloadAllContent();
+            }, 'Running Master Reload...');
+        } finally {
+            this.masterReloadInProgress = false;
+        }
+    }
+
+    setupPremiumGatePopup() {
+        const closeBtn = document.getElementById('premium-gate-close-btn');
+        closeBtn?.addEventListener('click', () => this.hidePremiumGatePopup());
+
+        this.premiumGatePopupEl?.addEventListener('click', (e) => {
+            if (e.target === this.premiumGatePopupEl) {
+                this.hidePremiumGatePopup();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.hidePremiumGatePopup();
+            }
+        });
+    }
+
+    showPremiumGatePopup(message = 'This action is a premium feature.') {
+        if (this.premiumGateTextEl) {
+            this.premiumGateTextEl.textContent = message;
+        }
+        this.premiumGatePopupEl?.classList.remove('hidden');
+    }
+
+    hidePremiumGatePopup() {
+        this.premiumGatePopupEl?.classList.add('hidden');
     }
 
     setupGlobalSearch() {

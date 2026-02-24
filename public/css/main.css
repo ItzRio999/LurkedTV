@@ -569,6 +569,77 @@ h4 {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
 }
 
+.premium-gate-card {
+  width: min(560px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: 22px;
+}
+
+.premium-gate-header {
+  width: 100%;
+  display: block;
+}
+
+.premium-gate-copy {
+  min-width: 0;
+  width: 100%;
+}
+
+.premium-gate-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.premium-gate-text {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+
+.premium-gate-logo {
+  width: 124px;
+  height: 124px;
+  object-fit: contain;
+  border-radius: 16px;
+  align-self: center;
+  margin-bottom: 2px;
+}
+
+#premium-gate-close-btn {
+  align-self: flex-end;
+  min-width: 150px;
+  min-height: 42px;
+  font-size: 0.98rem;
+  font-weight: 600;
+  padding: 10px 18px;
+}
+
+@media (max-width: 640px) {
+  .premium-gate-card {
+    width: min(560px, calc(100vw - 24px));
+    padding: 18px;
+  }
+
+  .premium-gate-header {
+    text-align: center;
+  }
+
+  .premium-gate-copy {
+    width: 100%;
+  }
+
+  #premium-gate-close-btn {
+    align-self: stretch;
+    width: 100%;
+  }
+}
+
 .search-page-content {
   height: 100%;
   overflow-y: auto;
