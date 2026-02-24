@@ -1,4 +1,6 @@
 const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 const { getDb } = require('../db/sqlite');
 const { sources } = require('../db');
 
@@ -21,12 +23,14 @@ class FirebaseCacheSyncService {
         if (this.initialized) return this.enabled;
         this.initialized = true;
 
-        const projectId = process.env.FIREBASE_PROJECT_ID || 'lurkedtv-b8047';
-        const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-        const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY;
+        const creds = this.resolveCredentials();
+        const projectId = creds.projectId || process.env.FIREBASE_PROJECT_ID || 'lurkedtv-b8047';
+        const clientEmail = creds.clientEmail;
+        const privateKeyRaw = creds.privateKey;
 
         if (!clientEmail || !privateKeyRaw) {
-            console.warn('[FirebaseCache] Disabled: FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY not configured');
+            this.lastError = 'Set FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY or FIREBASE_SERVICE_ACCOUNT_PATH';
+            console.warn('[FirebaseCache] Disabled:', this.lastError);
             this.enabled = false;
             return false;
         }
@@ -53,6 +57,63 @@ class FirebaseCacheSyncService {
             console.error('[FirebaseCache] Initialization failed:', err.message);
             return false;
         }
+    }
+
+    resolveCredentials() {
+        const envClientEmail = String(process.env.FIREBASE_CLIENT_EMAIL || '').trim();
+        const envPrivateKey = String(process.env.FIREBASE_PRIVATE_KEY || '').trim();
+        const envProjectId = String(process.env.FIREBASE_PROJECT_ID || '').trim();
+
+        if (envClientEmail && envPrivateKey) {
+            return {
+                projectId: envProjectId,
+                clientEmail: envClientEmail,
+                privateKey: envPrivateKey
+            };
+        }
+
+        const configuredPath = String(
+            process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+            process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+            ''
+        ).trim();
+
+        const candidates = [];
+        if (configuredPath) {
+            candidates.push(path.resolve(configuredPath));
+        }
+
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        try {
+            const files = fs.readdirSync(repoRoot);
+            const match = files.find(name => /firebase-adminsdk.*\.json$/i.test(name));
+            if (match) candidates.push(path.join(repoRoot, match));
+        } catch (_) {
+            // Ignore filesystem discovery errors and fall through.
+        }
+
+        for (const candidate of candidates) {
+            try {
+                if (!fs.existsSync(candidate)) continue;
+                const raw = fs.readFileSync(candidate, 'utf8');
+                const parsed = JSON.parse(raw);
+                const projectId = String(parsed?.project_id || envProjectId || '').trim();
+                const clientEmail = String(parsed?.client_email || '').trim();
+                const privateKey = String(parsed?.private_key || '').trim();
+                if (clientEmail && privateKey) {
+                    console.log(`[FirebaseCache] Using service account file: ${candidate}`);
+                    return { projectId, clientEmail, privateKey };
+                }
+            } catch (err) {
+                this.lastError = `Invalid service account file (${candidate}): ${err.message}`;
+            }
+        }
+
+        return {
+            projectId: envProjectId,
+            clientEmail: envClientEmail,
+            privateKey: envPrivateKey
+        };
     }
 
     startTimer() {

@@ -2,6 +2,52 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/sqlite');
 
+const stmtCache = new Map();
+const recentCache = new Map();
+const RECENT_CACHE_TTL_MS = (() => {
+    const raw = Number.parseInt(process.env.RECENT_CACHE_TTL_MS || '', 10);
+    return Number.isFinite(raw) && raw >= 0 ? raw : 15000;
+})();
+
+function getStmt(key, sql) {
+    if (!stmtCache.has(key)) {
+        stmtCache.set(key, getDb().prepare(sql));
+    }
+    return stmtCache.get(key);
+}
+
+function clearRecentCache() {
+    recentCache.clear();
+}
+
+function getRecentCacheKey(type, limit) {
+    return `${type}:${limit}`;
+}
+
+function readRecentCache(type, limit) {
+    const key = getRecentCacheKey(type, limit);
+    const hit = recentCache.get(key);
+    if (!hit) return null;
+
+    if ((Date.now() - hit.at) > RECENT_CACHE_TTL_MS) {
+        recentCache.delete(key);
+        return null;
+    }
+
+    return hit.data;
+}
+
+function writeRecentCache(type, limit, data) {
+    const key = getRecentCacheKey(type, limit);
+    recentCache.set(key, { at: Date.now(), data });
+
+    // Keep map bounded in case of lots of varying limits/types
+    if (recentCache.size > 24) {
+        const oldest = recentCache.keys().next().value;
+        recentCache.delete(oldest);
+    }
+}
+
 // Helper to map API item types to DB types and tables
 function mapItemType(apiType) {
     switch (apiType) {
@@ -86,6 +132,7 @@ router.post('/hide', async (req, res) => {
         `);
 
         stmt.run(sourceId, mapping.type, itemId);
+        clearRecentCache();
 
         res.json({ success: true });
     } catch (err) {
@@ -112,6 +159,7 @@ router.post('/show', async (req, res) => {
         `);
 
         stmt.run(sourceId, mapping.type, itemId);
+        clearRecentCache();
 
         res.json({ success: true });
     } catch (err) {
@@ -175,6 +223,7 @@ router.post('/hide/bulk', async (req, res) => {
         });
 
         runBulk(items);
+        clearRecentCache();
         res.json({ success: true, count: items.length });
     } catch (err) {
         if (err.code === 'SQLITE_BUSY') {
@@ -218,6 +267,7 @@ router.post('/show/bulk', async (req, res) => {
         });
 
         runBulk(items);
+        clearRecentCache();
         res.json({ success: true, count: items.length });
     } catch (err) {
         if (err.code === 'SQLITE_BUSY') {
@@ -249,6 +299,7 @@ router.post('/show/all', async (req, res) => {
             catCount += catResult.changes;
             itemCount += itemResult.changes;
         }
+        clearRecentCache();
 
         console.log(`[Channels] Show all for source ${sourceId} (${contentType}): ${catCount} categories, ${itemCount} items`);
         res.json({ success: true, categoriesUpdated: catCount, itemsUpdated: itemCount });
@@ -279,6 +330,7 @@ router.post('/hide/all', async (req, res) => {
             catCount += catResult.changes;
             itemCount += itemResult.changes;
         }
+        clearRecentCache();
 
         console.log(`[Channels] Hide all for source ${sourceId} (${contentType}): ${catCount} categories, ${itemCount} items`);
         res.json({ success: true, categoriesUpdated: catCount, itemsUpdated: itemCount });
@@ -291,13 +343,23 @@ router.post('/hide/all', async (req, res) => {
 // Get recent movies or series
 router.get('/recent', async (req, res) => {
     try {
-        const { type, limit = 12 } = req.query;
-        if (!type || (type !== 'movie' && type !== 'series')) {
+        const normalizedType = String(req.query.type || '').toLowerCase();
+        const requestedLimit = Number.parseInt(req.query.limit, 10);
+        const safeLimit = Number.isFinite(requestedLimit)
+            ? Math.min(Math.max(requestedLimit, 1), 100)
+            : 12;
+
+        if (normalizedType !== 'movie' && normalizedType !== 'series') {
             return res.status(400).json({ error: 'Valid type (movie or series) is required' });
         }
 
-        const db = getDb();
-        const recentItems = db.prepare(`
+        const cached = readRecentCache(normalizedType, safeLimit);
+        if (cached) {
+            res.set('Cache-Control', 'private, max-age=10');
+            return res.json(cached);
+        }
+
+        const recentItems = getStmt('channels.recent', `
             WITH ranked AS (
                 SELECT
                     p.*,
@@ -320,7 +382,7 @@ router.get('/recent', async (req, res) => {
             WHERE rn = 1
             ORDER BY COALESCE(added_at, '') DESC, id DESC
             LIMIT ?
-        `).all(type, parseInt(limit));
+        `).all(normalizedType, safeLimit);
 
         // Parse JSON data for each item
         const formatted = recentItems.map(item => {
@@ -337,6 +399,8 @@ router.get('/recent', async (req, res) => {
             };
         });
 
+        writeRecentCache(normalizedType, safeLimit, formatted);
+        res.set('Cache-Control', 'private, max-age=10');
         res.json(formatted);
     } catch (err) {
         console.error(`Error getting recent ${req.query.type}:`, err);

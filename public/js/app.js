@@ -309,9 +309,7 @@ class App {
 
     async checkAuth() {
         const token = localStorage.getItem('authToken');
-
         if (!token) {
-            // No token, redirect to login (replace to avoid back button issues)
             window.location.replace('/login.html');
             return;
         }
@@ -527,15 +525,35 @@ class App {
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 
-    // Fetch and display version badge
+    function toVersionLabel(versionValue) {
+        const raw = `${versionValue || ''}`.trim();
+        if (!raw) return '';
+        const major = Number.parseInt(raw.split('.')[0], 10);
+        return Number.isFinite(major) && major > 0 ? `V${major}` : `V${raw}`;
+    }
+
+    function applyVersionLabelToDom(versionLabel) {
+        const safeLabel = `${versionLabel || ''}`.trim();
+        if (!safeLabel) return;
+
+        document.querySelectorAll('#version-badge, .dashboard-version-tag, [data-version-label]')
+            .forEach((el) => {
+                el.textContent = safeLabel;
+            });
+    }
+
+    window.__LURKEDTV_VERSION_LABEL__ = window.__LURKEDTV_VERSION_LABEL__ || '';
+    window.applyVersionLabelToDom = applyVersionLabelToDom;
+    applyVersionLabelToDom(window.__LURKEDTV_VERSION_LABEL__);
+
+    // Fetch and apply version label everywhere
     fetch('/api/version')
         .then(res => res.json())
         .then(data => {
-            const badge = document.getElementById('version-badge');
-            if (badge && data.version) {
-                const major = Number.parseInt(`${data.version}`.split('.')[0], 10);
-                badge.textContent = Number.isFinite(major) && major > 0 ? `V${major}` : `V${data.version}`;
-            }
+            const label = toVersionLabel(data?.version);
+            if (!label) return;
+            window.__LURKEDTV_VERSION_LABEL__ = label;
+            applyVersionLabelToDom(label);
         })
         .catch(() => { });
 });

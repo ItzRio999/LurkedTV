@@ -39,7 +39,7 @@ function toSafeInt(value, fallback) {
 async function getEffectiveDiscordBotConfig() {
     const s = await settings.get();
     return {
-        prefix: toSafeString(s.discordBotPrefix, process.env.DISCORD_BOT_PREFIX || '!'),
+        prefix: toSafeString(s.discordBotPrefix, process.env.DISCORD_BOT_PREFIX || '.'),
         guildId: toSafeString(s.discordGuildId, process.env.DISCORD_GUILD_ID || process.env.DISCORD_SERVER_ID || '1356477545964372048'),
         adminRoleId: toSafeString(s.discordAdminRoleId, process.env.DISCORD_ADMIN_ROLE_ID || '1356477545989799990'),
         logChannelId: toSafeString(s.discordLogChannelId, ''),
@@ -302,7 +302,7 @@ router.get('/discord-bot/status', auth.requireAuth, auth.requireAdmin, async (re
 router.put('/discord-bot/config', auth.requireAuth, auth.requireAdmin, async (req, res) => {
     try {
         const updates = {};
-        if (req.body?.prefix !== undefined) updates.discordBotPrefix = toSafeString(req.body.prefix, '!').slice(0, 3);
+        if (req.body?.prefix !== undefined) updates.discordBotPrefix = toSafeString(req.body.prefix, '.').slice(0, 3);
         if (req.body?.guildId !== undefined) updates.discordGuildId = toSafeString(req.body.guildId, '');
         if (req.body?.adminRoleId !== undefined) updates.discordAdminRoleId = toSafeString(req.body.adminRoleId, '');
         if (req.body?.logChannelId !== undefined) updates.discordLogChannelId = toSafeString(req.body.logChannelId, '');

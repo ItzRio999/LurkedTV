@@ -33,12 +33,7 @@ class ChannelList {
      * Only proxies HTTP URLs when on HTTPS page
      */
     getProxiedImageUrl(url) {
-        if (!url || url.length === 0) return '/img/LurkedTV.png';
-        // Only proxy if we're on HTTPS and the image is HTTP
-        if (window.location.protocol === 'https:' && url.startsWith('http://')) {
-            return `/api/proxy/image?url=${encodeURIComponent(url)}`;
-        }
-        return url;
+        return window.API?.resolveImageUrl?.(url) || '/img/LurkedTV.png';
     }
 
     /**

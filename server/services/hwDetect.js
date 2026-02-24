@@ -211,6 +211,64 @@ async function detectAMF() {
 }
 
 /**
+ * Detect Windows Hardware-Accelerated GPU Scheduling (HAGS) state.
+ * Registry value:
+ *   HKLM\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers\\HwSchMode
+ * Typical values:
+ *   2 = enabled, 1 = disabled, 0/missing = system default/unknown
+ */
+async function detectHags() {
+    if (os.platform() !== 'win32') {
+        return {
+            supported: false,
+            enabled: null,
+            reason: 'HAGS is Windows-only'
+        };
+    }
+
+    try {
+        const result = execSync(
+            'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers" /v HwSchMode',
+            { timeout: 5000, encoding: 'utf-8', windowsHide: true }
+        );
+
+        const match = result.match(/HwSchMode\s+REG_DWORD\s+([^\s]+)/i);
+        if (!match) {
+            return {
+                supported: true,
+                enabled: null,
+                reason: 'Registry value not found'
+            };
+        }
+
+        const raw = String(match[1]).trim();
+        const parsed = raw.startsWith('0x')
+            ? Number.parseInt(raw.slice(2), 16)
+            : Number.parseInt(raw, 10);
+
+        if (!Number.isFinite(parsed)) {
+            return {
+                supported: true,
+                enabled: null,
+                reason: `Unparseable registry value: ${raw}`
+            };
+        }
+
+        return {
+            supported: true,
+            enabled: parsed === 2,
+            value: parsed
+        };
+    } catch (err) {
+        return {
+            supported: true,
+            enabled: null,
+            reason: 'Unable to read registry value'
+        };
+    }
+}
+
+/**
  * Detect CPU capabilities for software/hybrid transcoding
  */
 function detectCPU() {
@@ -250,11 +308,12 @@ async function detect() {
 
     console.log('[HwDetect] Probing hardware acceleration capabilities...');
 
-    const [nvidia, vaapi, qsv, amf, cpu] = await Promise.all([
+    const [nvidia, vaapi, qsv, amf, hags, cpu] = await Promise.all([
         detectNvidia(),
         detectVAAPI(),
         detectQuickSync(),
         detectAMF(),
+        detectHags(),
         Promise.resolve(detectCPU())
     ]);
 
@@ -275,6 +334,7 @@ async function detect() {
         amf,
         vaapi,
         qsv,
+        hags,
         cpu,
         recommended,
         recommendedPipeline: recommended === 'software'
@@ -311,5 +371,6 @@ module.exports = {
     detectNvidia,
     detectAMF,
     detectVAAPI,
-    detectQuickSync
+    detectQuickSync,
+    detectHags
 };

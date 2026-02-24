@@ -205,6 +205,9 @@ class SettingsPage {
 
     initAccountSettings() {
         const languageSelect = document.getElementById('setting-default-language');
+        const usernameForm = document.getElementById('account-username-form');
+        const usernameInput = document.getElementById('setting-new-username');
+        const usernameFeedback = document.getElementById('account-username-feedback');
         const passwordForm = document.getElementById('account-password-form');
         const feedback = document.getElementById('account-password-feedback');
         const discordActionBtn = document.getElementById('account-discord-action-btn');
@@ -218,6 +221,39 @@ class SettingsPage {
                 this.applyDefaultLanguagePreference(updatedUser.defaultLanguage || '');
             } catch (err) {
                 alert(`Failed to save default language: ${err.message}`);
+            }
+        });
+
+        usernameForm?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const requested = String(usernameInput?.value || '').trim();
+            if (!requested) {
+                if (usernameFeedback) usernameFeedback.textContent = 'Username is required.';
+                return;
+            }
+            if (requested.length < 3 || requested.length > 32) {
+                if (usernameFeedback) usernameFeedback.textContent = 'Username must be 3-32 characters long.';
+                return;
+            }
+            if (!/^[A-Za-z0-9_.-]+$/.test(requested)) {
+                if (usernameFeedback) usernameFeedback.textContent = 'Use letters, numbers, dot, underscore, or dash only.';
+                return;
+            }
+
+            if (usernameFeedback) usernameFeedback.textContent = 'Updating username...';
+            try {
+                const updatedUser = await API.account.changeUsername({ username: requested });
+                this.app.currentUser = updatedUser;
+                if (usernameInput) usernameInput.value = updatedUser.username || '';
+
+                const usernameEl = document.getElementById('account-username');
+                if (usernameEl) usernameEl.textContent = updatedUser.username || '-';
+
+                if (usernameFeedback) usernameFeedback.textContent = 'Username updated successfully.';
+                this.showToast('Username updated.', 'success');
+            } catch (err) {
+                if (usernameFeedback) usernameFeedback.textContent = `Username update failed: ${err.message}`;
             }
         });
 
@@ -293,6 +329,8 @@ class SettingsPage {
     }
 
     async loadAccountSettings() {
+        const usernameEl = document.getElementById('account-username');
+        const usernameInput = document.getElementById('setting-new-username');
         const emailEl = document.getElementById('account-email');
         const badgeEl = document.getElementById('account-email-verified-badge');
         const languageSelect = document.getElementById('setting-default-language');
@@ -308,6 +346,13 @@ class SettingsPage {
         try {
             const user = await API.account.getMe();
             this.app.currentUser = user;
+
+            if (usernameEl) {
+                usernameEl.textContent = user.username || '-';
+            }
+            if (usernameInput) {
+                usernameInput.value = user.username || '';
+            }
 
             if (emailEl) {
                 emailEl.textContent = user.email || 'No email found';
@@ -373,6 +418,7 @@ class SettingsPage {
             await this.updateAdminDashboardVisibility(user);
         } catch (err) {
             console.error('Error loading account settings:', err);
+            if (usernameEl) usernameEl.textContent = 'Unable to load account';
             if (emailEl) emailEl.textContent = 'Unable to load account';
             if (badgeEl) {
                 badgeEl.textContent = 'Unknown';
@@ -1104,8 +1150,9 @@ async loadHardwareInfo() {
                 const firebaseStatus = data.firebaseCache;
 
                 if (!firebaseStatus?.enabled) {
-                    firebaseDisplay.textContent = 'Disabled (missing Firebase admin env vars)';
-                    firebaseDisplay.title = firebaseStatus?.lastError || 'Set FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY';
+                    const detail = firebaseStatus?.lastError || 'Firebase cache is not configured';
+                    firebaseDisplay.textContent = `Disabled (${detail})`;
+                    firebaseDisplay.title = detail;
                 } else if (firebaseStatus.syncing) {
                     firebaseDisplay.textContent = 'Sync in progress...';
                     firebaseDisplay.title = firebaseStatus.nextSyncTime || '';

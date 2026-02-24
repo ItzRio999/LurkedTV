@@ -37,12 +37,13 @@ class HomePage {
     renderLayout() {
         const pageHome = document.getElementById('page-home');
         if (!pageHome) return;
+        const versionLabel = String(window.__LURKEDTV_VERSION_LABEL__ || '').trim();
 
         pageHome.innerHTML = `
             <div class="dashboard-content" id="home-content">
                 <section class="dashboard-welcome" id="dashboard-welcome">
                     <div class="dashboard-welcome-copy">
-                        <p class="dashboard-welcome-kicker">Welcome back <span class="dashboard-version-tag">V5</span></p>
+                        <p class="dashboard-welcome-kicker">Welcome back <span class="dashboard-version-tag" data-version-label>${versionLabel}</span></p>
                         <h1 class="dashboard-welcome-title" id="home-welcome-message">Welcome to LurkedTV</h1>
                         <p class="dashboard-welcome-subtitle">Your stream lineup is ready.</p>
                         <div class="dashboard-welcome-meta" id="dashboard-welcome-meta">
@@ -157,6 +158,10 @@ class HomePage {
                 </section>
             </div>
         `;
+
+        if (typeof window.applyVersionLabelToDom === 'function') {
+            window.applyVersionLabelToDom(window.__LURKEDTV_VERSION_LABEL__ || '');
+        }
         this.container = document.getElementById('home-content');
 
         // Attach scroll arrow handlers
@@ -683,7 +688,7 @@ class HomePage {
 
     createChannelTile(channel) {
         const logo = channel.tvgLogo || '/img/LurkedTV.png';
-        const logoUrl = logo.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(logo)}` : logo;
+        const logoUrl = window.API?.resolveImageUrl?.(logo) || logo;
         const name = channel.name || 'Unknown';
 
         return `
@@ -825,7 +830,7 @@ class HomePage {
             list.querySelectorAll('.dashboard-card').forEach(card => {
                 card.addEventListener('click', () => {
                     const id = card.dataset.id;
-                    const item = movies.find(m => m.item_id === id);
+                    const item = movies.find(m => String(m.item_id) === String(id));
                     if (item) this.playItem(item);
                 });
             });
@@ -834,6 +839,7 @@ class HomePage {
             this.updateScrollArrows();
         } catch (err) {
             console.error('[Dashboard] Error loading recent movies:', err);
+            list.innerHTML = '<div class="empty-state hint">Error loading recently added movies</div>';
         }
     }
 
@@ -843,7 +849,10 @@ class HomePage {
 
         try {
             const seriesRaw = await window.API.request('GET', '/channels/recent?type=series&limit=24');
-            const series = this.dedupeRecentItems(seriesRaw).slice(0, 12);
+            let series = this.dedupeRecentItems(seriesRaw).slice(0, 12);
+            if (!series || series.length === 0) {
+                series = await this.loadRecentSeriesFallback();
+            }
             if (!series || series.length === 0) {
                 list.innerHTML = '<div class="empty-state hint">No recently added series found</div>';
                 return;
@@ -855,7 +864,11 @@ class HomePage {
             list.querySelectorAll('.dashboard-card').forEach(card => {
                 card.addEventListener('click', () => {
                     const id = card.dataset.id;
-                    const item = series.find(s => s.item_id === id);
+                    const sourceId = card.dataset.sourceId || '';
+                    const item = series.find(s =>
+                        String(s.item_id) === String(id) &&
+                        String(s.source_id || s?.data?.sourceId || '') === String(sourceId)
+                    );
                     if (item) this.navigateToSeries(item);
                 });
             });
@@ -864,6 +877,59 @@ class HomePage {
             this.updateScrollArrows();
         } catch (err) {
             console.error('[Dashboard] Error loading recent series:', err);
+            list.innerHTML = '<div class="empty-state hint">Error loading recently added series</div>';
+        }
+    }
+
+    async loadRecentSeriesFallback() {
+        try {
+            const sources = await window.API.request('GET', '/sources/type/xtream');
+            if (!Array.isArray(sources) || sources.length === 0) return [];
+
+            const all = [];
+            for (const source of sources) {
+                if (!source?.enabled) continue;
+
+                let rows = [];
+                try {
+                    rows = await window.API.request('GET', `/proxy/xtream/${source.id}/series`);
+                } catch (err) {
+                    console.warn('[Dashboard] Fallback series load failed for source:', source.id, err);
+                    continue;
+                }
+
+                if (!Array.isArray(rows) || rows.length === 0) continue;
+
+                for (const row of rows) {
+                    const itemId = row.series_id || row.stream_id || row.id;
+                    if (itemId === null || itemId === undefined || itemId === '') continue;
+
+                    all.push({
+                        source_id: source.id,
+                        item_id: String(itemId),
+                        item_type: 'series',
+                        type: 'series',
+                        name: row.name || row.title || 'Series',
+                        stream_icon: row.cover || row.stream_icon || '',
+                        year: row.releaseDate || row.year || '',
+                        added: Number(row.last_modified || row.added || 0) || 0,
+                        data: {
+                            title: row.name || row.title || 'Series',
+                            poster: row.cover || row.stream_icon || '',
+                            year: row.releaseDate || row.year || '',
+                            sourceId: source.id
+                        }
+                    });
+                }
+            }
+
+            if (all.length === 0) return [];
+            return this.dedupeRecentItems(all)
+                .sort((a, b) => Number(b.added || 0) - Number(a.added || 0))
+                .slice(0, 12);
+        } catch (err) {
+            console.error('[Dashboard] Error in recent series fallback:', err);
+            return [];
         }
     }
 
@@ -990,7 +1056,7 @@ class HomePage {
         // Proxy the poster if it's an external URL
         const safeData = data || {};
         const poster = safeData.poster || '/img/LurkedTV.png';
-        const posterUrl = poster.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(poster)}` : poster;
+        const posterUrl = window.API?.resolveImageUrl?.(poster) || poster;
 
         return `
             <div class="dashboard-card" data-id="${item_id}" data-source-id="${item.source_id || safeData.sourceId || ''}" data-type="${type}">
@@ -1010,21 +1076,22 @@ class HomePage {
 
     createRecentCard(item) {
         const { data, item_id } = item;
+        const safeData = data || {};
         const type = item.type || item.item_type;
-        const poster = item.stream_icon || data.poster || '/img/LurkedTV.png';
-        const posterUrl = poster.startsWith('http') ? `/api/proxy/image?url=${encodeURIComponent(poster)}` : poster;
+        const poster = item.stream_icon || safeData.poster || '/img/LurkedTV.png';
+        const posterUrl = window.API?.resolveImageUrl?.(poster) || poster;
 
         return `
-            <div class="dashboard-card" data-id="${item_id}" data-type="${type}">
+            <div class="dashboard-card" data-id="${item_id}" data-source-id="${item.source_id || safeData.sourceId || ''}" data-type="${type}">
                 <div class="card-image">
-                    <img src="${posterUrl}" alt="${item.name}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
+                    <img src="${posterUrl}" alt="${item.name || safeData.title || 'Unknown Title'}" loading="lazy" onerror="this.onerror=null;this.src='/img/LurkedTV.png'">
                     <div class="play-icon-overlay">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                     </div>
                 </div>
                 <div class="card-info">
-                    <div class="card-title" title="${item.name || (data && data.title)}">${item.name || (data && data.title) || 'Unknown Title'}</div>
-                    <div class="card-subtitle">${(data && data.subtitle) || (type === 'movie' ? 'Movie' : 'Series')}</div>
+                    <div class="card-title" title="${item.name || safeData.title}">${item.name || safeData.title || 'Unknown Title'}</div>
+                    <div class="card-subtitle">${safeData.subtitle || (type === 'movie' ? 'Movie' : 'Series')}</div>
                 </div>
             </div>
         `;

@@ -46,6 +46,10 @@ class MoviesPage {
         this.virtualGap = 16;
         this.virtualOverscanRows = 4;
         this.detailsBackdropLoadId = 0;
+        this.externalMetadataByKey = new Map();
+        this.smartMetadataRequestSeq = 0;
+        this.skipNextSmartMetadataRefresh = false;
+        this.lastSmartMetadataSignature = '';
         this.onGridScroll = () => this.scheduleVirtualRender(false);
         this.onGridResize = () => {
             clearTimeout(this.resizeTimer);
@@ -346,6 +350,73 @@ class MoviesPage {
         return 0;
     }
 
+    normalizeCatalogTitle(rawTitle) {
+        let title = String(rawTitle || '').trim();
+        if (!title) return '';
+
+        const prefixPattern = /^(?:\[[^\]]+\]\s*|\([^)]+\)\s*|(?:EN|ENG|MULTI|MULTI-SUB|SUB|DUB|4K|UHD|FHD|HD|SD|AMZ|NF|NETFLIX|DSNP|DSNP\+|HMAX|MAX|HULU|ATVP|APPLETV|WEB|WEB-DL|WEBRIP|BLURAY|BDRIP|HDRIP|DVDRIP|X264|X265|HEVC|AAC|DDP5\.1|DD5\.1|IMAX|EXTENDED|REMASTERED)(?:[\s._-]+))+/i;
+        while (prefixPattern.test(title)) {
+            title = title.replace(prefixPattern, '').trim();
+        }
+
+        title = title.replace(/^[-:|._\s]+/, '').trim();
+
+        return title
+            .toLowerCase()
+            .replace(/['"`]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+    }
+
+    getAddedMs(item) {
+        const raw = item?.added || item?.added_at || item?.releaseDate || item?.release_date || '';
+        if (raw === null || raw === undefined || raw === '') return 0;
+        const text = String(raw).trim();
+        if (!text) return 0;
+        if (/^\d{10,13}$/.test(text)) {
+            const n = Number(text);
+            return text.length <= 10 ? n * 1000 : n;
+        }
+        const parsed = Date.parse(text);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    pickPreferredMovie(existing, candidate) {
+        const score = (item) => {
+            const hasPoster = this.getMoviePosterUrl(item) ? 1 : 0;
+            const rating = this.getMovieRating10(item);
+            const votes = this.getMovieVotes(item);
+            const year = this.getReleaseYear(item);
+            const addedMs = this.getAddedMs(item);
+            return (hasPoster * 4)
+                + (Math.max(0, Math.min(10, rating)) * 0.35)
+                + (Math.log10((votes || 0) + 1) * 0.4)
+                + ((year > 0 ? year : 0) * 0.001)
+                + ((addedMs > 0 ? addedMs : 0) * 0.0000000001);
+        };
+        return score(candidate) > score(existing) ? candidate : existing;
+    }
+
+    dedupeMoviesForAllCategories(items) {
+        const map = new Map();
+        for (const item of items) {
+            const normalizedTitle = this.normalizeCatalogTitle(item?.name || item?.title || '');
+            if (!normalizedTitle) {
+                map.set(`fallback:${item.sourceId}:${item.stream_id}`, item);
+                continue;
+            }
+
+            const year = this.getReleaseYear(item);
+            const key = year > 0 ? `${normalizedTitle}:${year}` : normalizedTitle;
+            if (!map.has(key)) {
+                map.set(key, item);
+            } else {
+                map.set(key, this.pickPreferredMovie(map.get(key), item));
+            }
+        }
+        return Array.from(map.values());
+    }
+
     getSmartDiscoverScore(movie, searchTerm = '') {
         const nowYear = new Date().getUTCFullYear();
         const ratingRaw = this.parseNumber(
@@ -372,7 +443,123 @@ class MoviesPage {
         return (ratingNorm * 0.58) + (votesNorm * 0.22) + (recencyNorm * 0.16) + (isFav * 0.04) + searchBonus;
     }
 
-    getMovieRating10(movie) {
+    getCatalogEntityKey(item) {
+        const normalizedTitle = this.normalizeCatalogTitle(item?.name || item?.title || '');
+        const year = this.getReleaseYear(item);
+        if (normalizedTitle) {
+            return year > 0 ? `${normalizedTitle}:${year}` : normalizedTitle;
+        }
+        return `fallback:${item?.sourceId || 'na'}:${item?.stream_id || item?.id || 'na'}`;
+    }
+
+    getExternalDiscoverScore(movie) {
+        const key = `movie:${this.getCatalogEntityKey(movie)}`;
+        const metadata = this.externalMetadataByKey.get(key);
+        return this.parseNumber(metadata?.smart?.score, 0);
+    }
+
+    getSmartSortScore(movie, searchTerm = '') {
+        const baseScore = this.getSmartDiscoverScore(movie, searchTerm);
+        const externalScore = this.getExternalDiscoverScore(movie);
+        return (baseScore * 0.62) + (externalScore * 0.38);
+    }
+
+    applyExternalMetadataToMovie(movie, metadata) {
+        if (!movie || !metadata) return;
+        const merged = metadata.merged || {};
+        const smart = metadata.smart || {};
+        const smartRating = this.parseNumber(smart.rating10, 0);
+        const smartVotes = Math.max(0, Math.floor(this.parseNumber(smart.votes, 0)));
+        const smartPercent = Math.max(0, Math.min(100, Math.floor(this.parseNumber(smart.ratingPercent, 0))));
+        if (merged.plot && !movie.plot && !movie.description && !movie.overview) movie.plot = merged.plot;
+        if (merged.genre && !movie.genre) movie.genre = merged.genre;
+        if (merged.director && !movie.director) movie.director = merged.director;
+        if (merged.cast && !movie.cast && !movie.actors) movie.cast = merged.cast;
+        if (merged.runtime && !movie.duration && !movie.runtime) movie.runtime = merged.runtime;
+        if (merged.poster && !this.getMoviePosterUrl(movie)) movie.cover = merged.poster;
+        if (merged.backdrop && !movie.backdrop_path && !movie.backdrop) movie.backdrop_path = merged.backdrop;
+        if (smartRating > 0) {
+            movie.smart_rating10 = smartRating;
+            movie.rating = smartRating;
+        }
+        if (smartVotes > 0) {
+            movie.smart_votes = smartVotes;
+            movie.votes = smartVotes;
+        }
+        if (smartPercent > 0) movie.smart_rating_percent = smartPercent;
+    }
+
+    sortMoviesForDiscover(searchTerm = '') {
+        this.filteredMovies.sort((a, b) => {
+            const scoreDelta = this.getSmartSortScore(b, searchTerm) - this.getSmartSortScore(a, searchTerm);
+            if (Math.abs(scoreDelta) > 0.0001) return scoreDelta;
+
+            const yearDelta = this.getReleaseYear(b) - this.getReleaseYear(a);
+            if (yearDelta !== 0) return yearDelta;
+
+            const ratingDelta = this.getMovieRating10(b) - this.getMovieRating10(a);
+            if (ratingDelta !== 0) return ratingDelta;
+
+            const votesDelta = this.getMovieVotes(b) - this.getMovieVotes(a);
+            if (votesDelta !== 0) return votesDelta;
+
+            return (a.name || '').localeCompare(b.name || '');
+        });
+    }
+
+    async scheduleSmartMetadataEnrichment(items) {
+        if (!Array.isArray(items) || items.length === 0 || !API?.metadata?.enrichBatch) return;
+
+        const candidates = items.map((movie) => ({
+            id: this.getCatalogEntityKey(movie),
+            title: movie?.name || movie?.title || '',
+            year: this.getReleaseYear(movie),
+            localRating: this.getProviderMovieRating10(movie),
+            localVotes: this.getProviderMovieVotes(movie),
+            movie
+        })).filter(row => row.id && row.title);
+
+        if (candidates.length === 0) return;
+
+        const signature = `movie:${candidates.map(c => c.id).join('|')}`;
+        if (signature === this.lastSmartMetadataSignature) return;
+        this.lastSmartMetadataSignature = signature;
+
+        const requestId = ++this.smartMetadataRequestSeq;
+        const chunkSize = 40;
+        try {
+            let changed = false;
+            for (let i = 0; i < candidates.length; i += chunkSize) {
+                if (requestId !== this.smartMetadataRequestSeq) return;
+                const chunk = candidates.slice(i, i + chunkSize);
+                const payload = chunk.map(({ id, title, year, localRating, localVotes }) => ({
+                    id, title, year, localRating, localVotes
+                }));
+                const response = await API.metadata.enrichBatch('movie', payload);
+                if (requestId !== this.smartMetadataRequestSeq) return;
+
+                chunk.forEach(({ id, movie }) => {
+                    const metadata = response?.items?.[id];
+                    if (!metadata) return;
+                    const mapKey = `movie:${id}`;
+                    const prevScore = this.parseNumber(this.externalMetadataByKey.get(mapKey)?.smart?.score, 0);
+                    const nextScore = this.parseNumber(metadata?.smart?.score, 0);
+                    if (Math.abs(nextScore - prevScore) > 0.0001) changed = true;
+                    this.externalMetadataByKey.set(mapKey, metadata);
+                    this.applyExternalMetadataToMovie(movie, metadata);
+                });
+            }
+
+            if (changed) {
+                this.skipNextSmartMetadataRefresh = true;
+                this.filterAndRender();
+            }
+        } catch (err) {
+            console.warn('Movie metadata enrichment failed:', err?.message || err);
+        }
+    }
+
+    getProviderMovieRating10(movie) {
         const ratingRaw = this.parseNumber(
             movie?.rating ?? movie?.imdb_rating ?? movie?.tmdb_rating ?? movie?.rating_5based,
             0
@@ -380,11 +567,22 @@ class MoviesPage {
         return ratingRaw > 0 ? (ratingRaw <= 5 ? ratingRaw * 2 : ratingRaw) : 0;
     }
 
-    getMovieVotes(movie) {
+    getMovieRating10(movie) {
+        const smartRating = this.parseNumber(movie?.smart_rating10 ?? movie?.smart?.rating10, 0);
+        if (smartRating > 0) return smartRating <= 5 ? smartRating * 2 : smartRating;
+        return this.getProviderMovieRating10(movie);
+    }
+
+    getProviderMovieVotes(movie) {
         return Math.max(0, Math.floor(this.parseNumber(
             movie?.votes ?? movie?.vote_count ?? movie?.num ?? movie?.rating_count ?? movie?.review_count ?? movie?.reviews,
             0
         )));
+    }
+
+    getMovieVotes(movie) {
+        const smartVotes = Math.max(0, Math.floor(this.parseNumber(movie?.smart_votes ?? movie?.smart?.votes, 0)));
+        return smartVotes > 0 ? smartVotes : this.getProviderMovieVotes(movie);
     }
 
     formatVotes(count) {
@@ -525,14 +723,81 @@ class MoviesPage {
         return '';
     }
 
-    getMergedMovieData(movie, details = null) {
+    getExternalProviderSummary(externalMetadata) {
+        const providers = externalMetadata?.smart?.providers || {};
+        const parts = [];
+        if (providers.local) parts.push('Provider');
+        if (providers.tmdb) parts.push('TMDB');
+        if (providers.omdb) parts.push('OMDb');
+        if (!parts.length) return '';
+        return parts.join(' + ');
+    }
+
+    async getMovieExternalMetadata(movie) {
+        if (!movie || !API?.metadata?.enrichBatch) return null;
+
+        const id = this.getCatalogEntityKey(movie);
+        const mapKey = `movie:${id}`;
+        if (this.externalMetadataByKey.has(mapKey)) {
+            return this.externalMetadataByKey.get(mapKey) || null;
+        }
+
+        try {
+            const payload = [{
+                id,
+                title: movie?.name || movie?.title || '',
+                year: this.getReleaseYear(movie),
+                localRating: this.getProviderMovieRating10(movie),
+                localVotes: this.getProviderMovieVotes(movie)
+            }];
+            const response = await API.metadata.enrichBatch('movie', payload);
+            const metadata = response?.items?.[id] || null;
+            if (metadata) {
+                this.externalMetadataByKey.set(mapKey, metadata);
+                this.applyExternalMetadataToMovie(movie, metadata);
+            }
+            return metadata;
+        } catch (err) {
+            console.warn('Movie detail metadata enrichment failed:', err?.message || err);
+            return null;
+        }
+    }
+
+    getMergedMovieData(movie, details = null, externalMetadata = null) {
         const info = details?.info || {};
         const movieData = details?.movie_data || {};
-        return {
+        const merged = {
             ...movie,
             ...movieData,
             ...info
         };
+
+        const external = externalMetadata?.merged || {};
+        if (external.plot && !merged.plot && !merged.description && !merged.overview) merged.plot = external.plot;
+        if (external.genre && !merged.genre) merged.genre = external.genre;
+        if (external.director && !merged.director) merged.director = external.director;
+        if (external.cast && !merged.cast && !merged.actors) merged.cast = external.cast;
+        if (external.runtime && !merged.duration && !merged.runtime) merged.runtime = external.runtime;
+        if (external.poster && !this.getMoviePosterUrl(merged)) merged.cover = external.poster;
+        if (external.backdrop && !merged.backdrop_path && !merged.backdrop) merged.backdrop_path = external.backdrop;
+
+        const smart = externalMetadata?.smart || {};
+        const smartRating = this.parseNumber(smart.rating10, 0);
+        const smartPercent = Math.max(0, Math.min(100, Math.floor(this.parseNumber(smart.ratingPercent, 0))));
+        const smartVotes = Math.max(0, Math.floor(this.parseNumber(smart.votes, 0)));
+        const smartYear = this.parseNumber(smart.year, 0);
+        if (smartRating > 0) {
+            merged.smart_rating10 = smartRating;
+            merged.rating = smartRating;
+        }
+        if (smartVotes > 0) {
+            merged.smart_votes = smartVotes;
+            merged.votes = smartVotes;
+        }
+        if (smartPercent > 0) merged.smart_rating_percent = smartPercent;
+        if (smartYear > 0 && this.getReleaseYear(merged) <= 0) merged.year = smartYear;
+
+        return merged;
     }
 
     async getMovieDetails(sourceId, streamId) {
@@ -712,18 +977,14 @@ class MoviesPage {
         });
 
         if (isAllCategories) {
-            this.filteredMovies.sort((a, b) => {
-                const scoreDelta = this.getSmartDiscoverScore(b, searchTerm) - this.getSmartDiscoverScore(a, searchTerm);
-                if (Math.abs(scoreDelta) > 0.0001) return scoreDelta;
+            this.filteredMovies = this.dedupeMoviesForAllCategories(this.filteredMovies);
+            this.sortMoviesForDiscover(searchTerm);
+        }
 
-                const yearDelta = this.getReleaseYear(b) - this.getReleaseYear(a);
-                if (yearDelta !== 0) return yearDelta;
-
-                const ratingDelta = this.parseNumber(b.rating, 0) - this.parseNumber(a.rating, 0);
-                if (ratingDelta !== 0) return ratingDelta;
-
-                return (a.name || '').localeCompare(b.name || '');
-            });
+        if (this.skipNextSmartMetadataRefresh) {
+            this.skipNextSmartMetadataRefresh = false;
+        } else {
+            this.scheduleSmartMetadataEnrichment(this.filteredMovies);
         }
 
         console.log(`[Movies] Displaying ${this.filteredMovies.length} of ${this.movies.length} movies`);
@@ -933,14 +1194,25 @@ class MoviesPage {
         }
 
         let details = null;
-        try {
-            details = await this.getMovieDetails(movie.sourceId, movie.stream_id);
+        let externalMetadata = null;
+        const [detailsResult, externalResult] = await Promise.allSettled([
+            this.getMovieDetails(movie.sourceId, movie.stream_id),
+            this.getMovieExternalMetadata(movie)
+        ]);
+        if (detailsResult.status === 'fulfilled') {
+            details = detailsResult.value;
             this.currentMovieDetails = details;
-        } catch (err) {
-            console.warn('Failed to load movie details:', err.message);
+        } else if (detailsResult.reason) {
+            console.warn('Failed to load movie details:', detailsResult.reason?.message || detailsResult.reason);
+        }
+        if (externalResult.status === 'fulfilled') {
+            externalMetadata = externalResult.value;
         }
 
-        const merged = this.getMergedMovieData(movie, details);
+        const merged = this.getMergedMovieData(movie, details, externalMetadata);
+        if (this.detailsPoster) {
+            this.detailsPoster.src = this.getMoviePosterUrl(merged) || '/img/LurkedTV.png';
+        }
         this.setDetailsBackdrop(this.getMovieBackdropUrl(merged));
 
         if (this.detailsPlot) {
@@ -968,6 +1240,10 @@ class MoviesPage {
 
         const year = this.getReleaseYear(merged);
         const rating10 = this.getMovieRating10(merged);
+        const ratingPercent = Math.max(0, Math.min(100, Math.floor(this.parseNumber(
+            merged?.smart_rating_percent ?? externalMetadata?.smart?.ratingPercent,
+            rating10 > 0 ? rating10 * 10 : 0
+        ))));
         const votes = this.getMovieVotes(merged);
         const duration = merged.duration || merged.runtime || '';
 
@@ -984,14 +1260,16 @@ class MoviesPage {
 
         if (this.detailsRatingScore) {
             if (rating10 > 0) {
-                this.detailsRatingScore.innerHTML = `${Icons.star} ${rating10.toFixed(1)}/10`;
+                this.detailsRatingScore.innerHTML = `${Icons.star} ${rating10.toFixed(1)}/10 (${ratingPercent}%)`;
             } else {
                 this.detailsRatingScore.textContent = 'Not Rated';
             }
         }
 
         if (this.detailsRatingCount) {
-            this.detailsRatingCount.textContent = this.formatVotes(votes);
+            const sourceSummary = this.getExternalProviderSummary(externalMetadata);
+            const baseVotes = this.formatVotes(votes);
+            this.detailsRatingCount.textContent = sourceSummary ? `${baseVotes} • ${sourceSummary}` : baseVotes;
         }
     }
 

@@ -826,6 +826,75 @@ router.patch('/me/preferences', auth.requireAuth, async (req, res) => {
 });
 
 /**
+ * Change current user username
+ * POST /api/auth/me/change-username
+ */
+router.post('/me/change-username', auth.requireAuth, async (req, res) => {
+    try {
+        const requestedUsername = String(req.body?.username || '').trim();
+
+        if (!requestedUsername) {
+            return res.status(400).json({ error: 'Username is required' });
+        }
+        if (requestedUsername.length < 3 || requestedUsername.length > 32) {
+            return res.status(400).json({ error: 'Username must be 3-32 characters long' });
+        }
+        if (!/^[A-Za-z0-9_.-]+$/.test(requestedUsername)) {
+            return res.status(400).json({ error: 'Username can only contain letters, numbers, dot, underscore, and dash' });
+        }
+
+        const currentUser = await db.users.getById(req.user.id);
+        if (!currentUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (requestedUsername === currentUser.username) {
+            const discordAdmin = await isDashboardAdminUser(currentUser);
+            return res.json({
+                id: currentUser.id,
+                username: currentUser.username,
+                role: currentUser.role,
+                email: currentUser.email || null,
+                defaultLanguage: currentUser.defaultLanguage || '',
+                emailVerified: !!currentUser.firebaseUid,
+                discordLinked: !!currentUser.discordId,
+                discordAdmin,
+                discordUsername: currentUser.discordUsername || null,
+                discordDisplayName: currentUser.discordDisplayName || null,
+                discordAvatarUrl: currentUser.discordAvatarUrl || null,
+                discordMemberStatus: currentUser.discordMemberStatus || null
+            });
+        }
+
+        const existing = await db.users.getByUsername(requestedUsername);
+        if (existing && existing.id !== currentUser.id) {
+            return res.status(409).json({ error: 'Username already exists' });
+        }
+
+        const updatedUser = await db.users.update(req.user.id, { username: requestedUsername });
+        const discordAdmin = await isDashboardAdminUser(updatedUser);
+
+        res.json({
+            id: updatedUser.id,
+            username: updatedUser.username,
+            role: updatedUser.role,
+            email: updatedUser.email || null,
+            defaultLanguage: updatedUser.defaultLanguage || '',
+            emailVerified: !!updatedUser.firebaseUid,
+            discordLinked: !!updatedUser.discordId,
+            discordAdmin,
+            discordUsername: updatedUser.discordUsername || null,
+            discordDisplayName: updatedUser.discordDisplayName || null,
+            discordAvatarUrl: updatedUser.discordAvatarUrl || null,
+            discordMemberStatus: updatedUser.discordMemberStatus || null
+        });
+    } catch (err) {
+        console.error('Error changing username:', err);
+        res.status(500).json({ error: err.message || 'Failed to change username' });
+    }
+});
+
+/**
  * Change current user password
  * POST /api/auth/me/change-password
  */

@@ -220,6 +220,7 @@ app.use('/api/probe', require('./routes/probe'));
 app.use('/api/subtitle', require('./routes/subtitle'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/history', require('./routes/history'));
+app.use('/api/metadata', require('./routes/metadata'));
 
 // Version endpoint
 app.get('/api/version', (req, res) => {

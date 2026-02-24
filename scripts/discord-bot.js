@@ -1,7 +1,9 @@
 require('dotenv').config({ quiet: true });
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const fs = require('fs/promises');
+const path = require('path');
 
-let prefix = process.env.DISCORD_BOT_PREFIX || '!';
+let prefix = process.env.DISCORD_BOT_PREFIX || '.';
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const API_BASE_URL = (process.env.NODECAST_API_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
 const DEFAULT_NODECAST_TOKEN = process.env.NODECAST_API_TOKEN || '';
@@ -71,6 +73,10 @@ const userTokenMap = parseUserTokenMap(process.env.DISCORD_USER_TOKEN_MAP);
 let autoTokenCache = { token: '', expiresAt: 0 };
 let autoTokenPromise = null;
 const processedMessageIds = new Map();
+const MUST_WATCH_MEMORY_FILE = path.join(__dirname, '..', 'data', 'discord-bot', 'mustwatch-seen.json');
+let mustWatchMemoryLoaded = false;
+let mustWatchMemoryCache = null;
+let mustWatchMemoryWriteQueue = Promise.resolve();
 
 // ─── Enhanced Embed Builder ────────────────────────────────────────────────────
 
@@ -126,6 +132,11 @@ function formatSeconds(totalSeconds) {
     const s = sec % 60;
     if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function formatCount(value) {
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? n.toLocaleString('en-US') : '0';
 }
 
 function buildProgressBar(progress, duration, barLength = 14) {
@@ -466,9 +477,7 @@ async function getNodecastTokenFromDiscordLink(discordUserId) {
 async function getNodecastTokenForDiscordUser(discordUserId) {
     const linkedToken = await getNodecastTokenFromDiscordLink(discordUserId);
     if (linkedToken) return linkedToken;
-    if (userTokenMap[discordUserId]) return userTokenMap[discordUserId];
-    if (DEFAULT_NODECAST_TOKEN) return DEFAULT_NODECAST_TOKEN;
-    return getAutoFetchedNodecastToken();
+    throw new Error('Your Discord account is not linked to a LurkedTV account.');
 }
 
 function isLikelyWatchingNow(historyItem) {
@@ -498,6 +507,443 @@ async function getLatestHistoryItems(token, limit = 1) {
     const safeLimit = Math.max(1, Math.min(10, Number(limit) || 1));
     const history = await apiGet(`/api/history?limit=${safeLimit}`, token);
     return Array.isArray(history) ? history : [];
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getSourceSyncStatuses(token) {
+    const statuses = await apiGet('/api/sources/status', token);
+    return Array.isArray(statuses) ? statuses : [];
+}
+
+async function getSourceProcessingStats(token, sourceIds = []) {
+    const uniqueIds = [...new Set((sourceIds || []).map(id => String(id).trim()).filter(Boolean))];
+    if (!uniqueIds.length) {
+        return { statsById: new Map(), totals: { channels: 0, programmes: 0, movies: 0, series: 0, items: 0 } };
+    }
+
+    const query = encodeURIComponent(uniqueIds.join(','));
+    const payload = await apiGet(`/api/sources/stats?sourceIds=${query}`, token);
+    const rows = Array.isArray(payload?.stats) ? payload.stats : [];
+    const statsById = new Map(
+        rows.map((row) => {
+            const sid = String(row?.sourceId ?? '');
+            return [sid, {
+                channels: Number(row?.channels || 0),
+                programmes: Number(row?.programmes || 0),
+                movies: Number(row?.movies || 0),
+                series: Number(row?.series || 0),
+                items: Number(row?.items || 0),
+            }];
+        })
+    );
+
+    const totals = {
+        channels: Number(payload?.totals?.channels || 0),
+        programmes: Number(payload?.totals?.programmes || 0),
+        movies: Number(payload?.totals?.movies || 0),
+        series: Number(payload?.totals?.series || 0),
+        items: Number(payload?.totals?.items || 0),
+    };
+
+    return { statsById, totals };
+}
+
+function getLatestAllSyncStatusForSource(statuses, sourceId) {
+    const sid = String(sourceId);
+    const rows = statuses
+        .filter(row => String(row?.source_id) === sid && String(row?.type || '').toLowerCase() === 'all')
+        .sort((a, b) => Number(b?.last_sync || 0) - Number(a?.last_sync || 0));
+    return rows[0] || null;
+}
+
+async function waitForRefreshCompletion(token, sourceIds, startedAfterMs, timeoutMs = 20 * 60 * 1000, pollMs = 5000) {
+    const pending = new Set((sourceIds || []).map(id => String(id)));
+    const results = new Map();
+    const deadline = Date.now() + timeoutMs;
+
+    while (pending.size > 0 && Date.now() < deadline) {
+        const statuses = await getSourceSyncStatuses(token);
+        for (const sid of [...pending]) {
+            const latest = getLatestAllSyncStatusForSource(statuses, sid);
+            if (!latest) continue;
+
+            const lastSync = Number(latest?.last_sync || 0);
+            if (!Number.isFinite(lastSync) || lastSync < (startedAfterMs - 1500)) continue;
+
+            const status = String(latest?.status || '').toLowerCase();
+            if (status === 'success' || status === 'error') {
+                results.set(sid, {
+                    status,
+                    error: sanitizeEmbedText(latest?.error, ''),
+                    lastSync,
+                });
+                pending.delete(sid);
+            }
+        }
+
+        if (pending.size > 0) await sleep(pollMs);
+    }
+
+    return { timedOut: pending.size > 0, pending: [...pending], results };
+}
+
+async function monitorRefreshAndNotify({
+    message,
+    token,
+    sourceIds = [],
+    sourceNameById = {},
+    startedAfterMs,
+    scopeLabel,
+    requestedByLabel,
+}) {
+    try {
+        const outcome = await waitForRefreshCompletion(token, sourceIds, startedAfterMs);
+        if (outcome.timedOut) {
+            await message.reply({
+                embeds: [
+                    buildEmbed({
+                        title: `${EMOJI.warning} Refresh Still Running`,
+                        description: `Refresh for **${scopeLabel}** is still in progress (or timed out waiting).`,
+                        color: COLORS.warning,
+                    }),
+                ],
+            });
+            return;
+        }
+
+        const failed = [];
+        for (const [sid, result] of outcome.results.entries()) {
+            if (result.status !== 'error') continue;
+            failed.push({
+                sourceId: sid,
+                sourceName: sanitizeEmbedText(sourceNameById[sid], `Source ${sid}`),
+                error: sanitizeEmbedText(result.error, 'Unknown sync failure'),
+            });
+        }
+
+        if (failed.length) {
+            const lines = failed.map(f => `**${f.sourceName}** (ID: \`${f.sourceId}\`)\n\`\`\`${f.error}\`\`\``);
+            await message.reply({
+                embeds: [
+                    buildEmbed({
+                        title: `${EMOJI.error} Refresh Failed`,
+                        description: lines.join('\n\n'),
+                        color: COLORS.error,
+                        footer: requestedByLabel ? `Requested by ${requestedByLabel}` : undefined,
+                    }),
+                ],
+            });
+            return;
+        }
+
+        let statsById = new Map();
+        let totals = { channels: 0, programmes: 0, movies: 0, series: 0, items: 0 };
+        try {
+            const statsPayload = await getSourceProcessingStats(token, sourceIds);
+            statsById = statsPayload.statsById;
+            totals = statsPayload.totals;
+        } catch (_) {
+            // Keep completion notification resilient even if stats lookup fails.
+        }
+
+        const fields = [];
+        if (requestedByLabel) {
+            fields.push({ name: 'Requested By', value: requestedByLabel, inline: true });
+        }
+        if (sourceIds.length === 1) {
+            const sid = String(sourceIds[0]);
+            const sourceName = sanitizeEmbedText(sourceNameById[sid], `Source ${sid}`);
+            fields.push({ name: 'Playlist', value: `${sourceName} (ID: \`${sid}\`)`, inline: true });
+            const stats = statsById.get(sid);
+            if (stats) {
+                fields.push({
+                    name: 'Processed',
+                    value: `${formatCount(stats.channels)} channels\n${formatCount(stats.programmes)} programmes\n${formatCount(stats.movies)} movies\n${formatCount(stats.series)} series`,
+                    inline: true,
+                });
+            }
+        } else {
+            fields.push({ name: 'Playlists', value: `${formatCount(sourceIds.length)} refreshed`, inline: true });
+            if (totals) {
+                fields.push({
+                    name: 'Processed',
+                    value: `${formatCount(totals.channels)} channels\n${formatCount(totals.programmes)} programmes\n${formatCount(totals.movies)} movies\n${formatCount(totals.series)} series`,
+                    inline: true,
+                });
+            }
+
+            const perPlaylist = sourceIds
+                .map((sid) => {
+                    const sourceName = sanitizeEmbedText(sourceNameById[sid], `Source ${sid}`);
+                    const stats = statsById.get(String(sid));
+                    if (!stats) return null;
+                    return `- ${sourceName}: ${formatCount(stats.channels)} ch, ${formatCount(stats.programmes)} prog, ${formatCount(stats.movies)} mov, ${formatCount(stats.series)} ser`;
+                })
+                .filter(Boolean);
+            if (perPlaylist.length) {
+                const visible = perPlaylist.slice(0, 8);
+                const remaining = perPlaylist.length - visible.length;
+                if (remaining > 0) visible.push(`...and ${remaining} more`);
+                fields.push({ name: 'By Playlist', value: visible.join('\n'), inline: false });
+            }
+        }
+
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.success} Refresh Completed`,
+                    description: `Refresh finished successfully for **${scopeLabel}**.`,
+                    fields,
+                    color: COLORS.success,
+                }),
+            ],
+        });
+    } catch (err) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.error} Refresh Monitor Error`,
+                    description: `\`\`\`${sanitizeEmbedText(err?.message, 'Unknown error')}\`\`\``,
+                    color: COLORS.error,
+                }),
+            ],
+        });
+    }
+}
+
+function createEmptyMustWatchMemory() {
+    return { version: 1, users: {} };
+}
+
+function getMovieMemoryKey(movie) {
+    const sourceId = sanitizeEmbedText(movie?.sourceId, '');
+    const itemId = sanitizeEmbedText(movie?.itemId, '');
+    if (sourceId && itemId) return `${sourceId}:${itemId}`;
+    const title = sanitizeEmbedText(movie?.title, '').toLowerCase();
+    const year = sanitizeEmbedText(movie?.year, '');
+    return title ? `${title}:${year}` : '';
+}
+
+async function loadMustWatchMemory() {
+    if (mustWatchMemoryLoaded && mustWatchMemoryCache) return mustWatchMemoryCache;
+
+    try {
+        const raw = await fs.readFile(MUST_WATCH_MEMORY_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const users = parsed.users && typeof parsed.users === 'object' && !Array.isArray(parsed.users) ? parsed.users : {};
+            mustWatchMemoryCache = { version: 1, users };
+        } else {
+            mustWatchMemoryCache = createEmptyMustWatchMemory();
+        }
+    } catch (_) {
+        mustWatchMemoryCache = createEmptyMustWatchMemory();
+    }
+
+    mustWatchMemoryLoaded = true;
+    return mustWatchMemoryCache;
+}
+
+function queueMustWatchMemoryWrite() {
+    mustWatchMemoryWriteQueue = mustWatchMemoryWriteQueue
+        .then(async () => {
+            const payload = mustWatchMemoryCache || createEmptyMustWatchMemory();
+            await fs.mkdir(path.dirname(MUST_WATCH_MEMORY_FILE), { recursive: true });
+            await fs.writeFile(MUST_WATCH_MEMORY_FILE, JSON.stringify(payload, null, 2), 'utf8');
+        })
+        .catch((err) => {
+            console.warn('[DiscordBot] Failed to persist must-watch memory:', err.message);
+        });
+    return mustWatchMemoryWriteQueue;
+}
+
+async function getSeenMovieKeysForUser(discordUserId) {
+    const memory = await loadMustWatchMemory();
+    const userBucket = memory?.users?.[discordUserId];
+    const seen = userBucket?.seen;
+    if (!seen || typeof seen !== 'object') return new Set();
+    return new Set(Object.keys(seen));
+}
+
+async function markMoviesAsSeenForUser(discordUserId, movies) {
+    if (!discordUserId || !Array.isArray(movies) || !movies.length) return;
+    const memory = await loadMustWatchMemory();
+    if (!memory.users[discordUserId]) memory.users[discordUserId] = { seen: {} };
+    if (!memory.users[discordUserId].seen || typeof memory.users[discordUserId].seen !== 'object') {
+        memory.users[discordUserId].seen = {};
+    }
+
+    const now = Date.now();
+    for (const movie of movies) {
+        const key = getMovieMemoryKey(movie);
+        if (!key) continue;
+        const existing = memory.users[discordUserId].seen[key];
+        memory.users[discordUserId].seen[key] = {
+            key,
+            sourceId: movie?.sourceId || null,
+            itemId: movie?.itemId || null,
+            title: movie?.title || 'Unknown Movie',
+            year: movie?.year || null,
+            firstSeenAt: existing?.firstSeenAt || now,
+            lastSeenAt: now,
+            timesRecommended: Number(existing?.timesRecommended || 0) + 1,
+        };
+    }
+
+    await queueMustWatchMemoryWrite();
+}
+
+async function getUnseenMoviesForUser(discordUserId, movies) {
+    const seenKeys = await getSeenMovieKeysForUser(discordUserId);
+    return movies.filter(movie => {
+        const key = getMovieMemoryKey(movie);
+        return key && !seenKeys.has(key);
+    });
+}
+
+async function resetSeenMoviesForUser(discordUserId) {
+    if (!discordUserId) return 0;
+    const memory = await loadMustWatchMemory();
+    const userBucket = memory?.users?.[discordUserId];
+    const seen = userBucket?.seen && typeof userBucket.seen === 'object' ? userBucket.seen : {};
+    const count = Object.keys(seen).length;
+    delete memory.users[discordUserId];
+    await queueMustWatchMemoryWrite();
+    return count;
+}
+
+function parseNumericRating(value) {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        if (value <= 0) return null;
+        return value > 10 ? (value / 10) : value;
+    }
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const match = raw.match(/(\d+(?:\.\d+)?)/);
+    if (!match) return null;
+    const parsed = Number(match[1]);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed > 10 ? (parsed / 10) : parsed;
+}
+
+function formatRatingLabel(value) {
+    const n = parseNumericRating(value);
+    if (!n) return 'N/A';
+    return `${Math.min(10, n).toFixed(1)}/10`;
+}
+
+function parseYearValue(...candidates) {
+    for (const value of candidates) {
+        const raw = String(value ?? '').trim();
+        if (!raw) continue;
+        const match = raw.match(/\b(19|20)\d{2}\b/);
+        if (!match) continue;
+        const year = Number(match[0]);
+        if (Number.isFinite(year)) return year;
+    }
+    return null;
+}
+
+function parseTimestampMs(value) {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        if (value <= 0) return 0;
+        return value > 10_000_000_000 ? value : (value * 1000);
+    }
+    const raw = String(value).trim();
+    if (!raw) return 0;
+    if (/^\d+$/.test(raw)) {
+        const asNum = Number(raw);
+        if (Number.isFinite(asNum) && asNum > 0) {
+            return asNum > 10_000_000_000 ? asNum : (asNum * 1000);
+        }
+    }
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeMovieItem(item) {
+    const data = item?.data && typeof item.data === 'object' ? item.data : {};
+    const title = sanitizeEmbedText(item?.name || data.title || data.name, 'Unknown Movie');
+    const rating = parseNumericRating(
+        data.rating ??
+        data.vote_average ??
+        data.votes ??
+        item?.rating
+    );
+    const year = parseYearValue(
+        item?.year,
+        data.year,
+        data.releaseDate,
+        data.releasedate,
+        data.release_date
+    );
+    const addedAtMs = parseTimestampMs(item?.added_at ?? data.added ?? data.added_at ?? data.last_modified);
+
+    return {
+        sourceId: item?.source_id,
+        itemId: sanitizeEmbedText(item?.item_id, ''),
+        title,
+        rating,
+        year,
+        addedAtMs,
+        container: sanitizeEmbedText(item?.container_extension || data.container_extension || data.containerExtension, ''),
+        poster: sanitizeEmbedText(item?.stream_icon || data.poster || data.stream_icon || data.cover, ''),
+        thumbnail: sanitizeEmbedText(data.cover_big || data.cover || data.stream_icon || item?.stream_icon || '', ''),
+    };
+}
+
+function rankMustWatchMovies(items, limit = 5) {
+    const normalized = items.map(normalizeMovieItem).filter(m => m.itemId && m.sourceId);
+    normalized.sort((a, b) => {
+        const ar = a.rating ?? -1;
+        const br = b.rating ?? -1;
+        if (br !== ar) return br - ar;
+
+        const ay = a.year ?? 0;
+        const by = b.year ?? 0;
+        if (by !== ay) return by - ay;
+
+        return (b.addedAtMs || 0) - (a.addedAtMs || 0);
+    });
+
+    const unique = [];
+    const seen = new Set();
+    for (const movie of normalized) {
+        const key = movie.title.toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        unique.push(movie);
+        if (unique.length >= limit) break;
+    }
+    return unique;
+}
+
+async function resolveCatalogMovieStreamLink(token, movie) {
+    if (!movie?.sourceId || !movie?.itemId) return null;
+    const fakeHistoryItem = {
+        data: {
+            containerExtension: movie.container,
+            streamContainer: movie.container,
+        }
+    };
+    const containers = getContainerCandidates(fakeHistoryItem, 'movie');
+    const resolved = await tryResolveStreamUrl(token, movie.sourceId, movie.itemId, 'movie', containers);
+    return resolved?.url || null;
+}
+
+async function getMustWatchMovies(token, discordUserId, limit = 5) {
+    const poolSize = Math.max(20, Math.min(100, limit * 12));
+    const movies = await apiGet(`/api/channels/recent?type=movie&limit=${poolSize}`, token);
+    if (!Array.isArray(movies) || !movies.length) return [];
+    const ranked = rankMustWatchMovies(movies, poolSize);
+    const unseen = await getUnseenMoviesForUser(discordUserId, ranked);
+    return unseen.slice(0, limit);
 }
 
 function formatHistoryItem(item, index) {
@@ -538,27 +984,52 @@ function buildHelpEmbed() {
         fields: [
             {
                 name: `${EMOJI.download} \`${prefix}download\``,
-                value: 'Get a direct download link for what you are currently watching.',
+                value: 'Get a direct download link for what you are currently watching.\nAliases: none',
                 inline: false,
             },
             {
                 name: `${EMOJI.play} \`${prefix}status\``,
-                value: 'Show your currently playing title with live progress.',
+                value: `Show your currently playing title with live progress.\nAliases: \`${prefix}nowplaying\``,
                 inline: false,
             },
             {
                 name: `${EMOJI.history} \`${prefix}recent [count]\``,
-                value: 'Show your recent watch history. Default **3**, max **10**.',
+                value: `Show your recent watch history. Default **3**, max **10**.\nAliases: \`${prefix}history\``,
+                inline: false,
+            },
+            {
+                name: `${EMOJI.updated} \`${prefix}refresh [sourceId|all]\``,
+                value: `Refresh your library cache. Default is all enabled sources.\nAliases: \`${prefix}sync\`, \`${prefix}resync\``,
+                inline: false,
+            },
+            {
+                name: `${EMOJI.film} \`${prefix}mustwatch [count]\``,
+                value: `Show top-rated movies you actually have. Default **5**, max **10**.\nAliases: \`${prefix}must-watch\`, \`${prefix}mw\``,
+                inline: false,
+            },
+            {
+                name: `${EMOJI.gear} \`${prefix}mwreset\``,
+                value: `Clear your Must Watch seen-history so titles can be recommended again.\nAliases: \`${prefix}resetmw\`, \`${prefix}mwclear\``,
+                inline: false,
+            },
+            {
+                name: `${EMOJI.gear} \`${prefix}clear [count]\``,
+                value: 'Clear recent messages in this channel (default 10, max 99). Requires Manage Messages permission.',
+                inline: false,
+            },
+            {
+                name: `${EMOJI.gear} \`${prefix}prefix [newPrefix]\``,
+                value: `Show or change the bot command prefix at runtime (1-3 chars, no spaces).\nAliases: \`${prefix}setprefix\``,
                 inline: false,
             },
             {
                 name: `${EMOJI.ping} \`${prefix}ping\``,
-                value: 'Check bot response latency.',
+                value: `Check bot response latency.\nAliases: \`${prefix}latency\``,
                 inline: false,
             },
             {
                 name: `${EMOJI.help} \`${prefix}help\``,
-                value: 'Show this command list.',
+                value: `Show this command list.\nAliases: \`${prefix}commands\`, \`${prefix}cmds\``,
                 inline: false,
             },
         ],
@@ -590,6 +1061,18 @@ function buildErrorEmbed(command, errorMessage) {
         ].join('\n'),
         color: COLORS.error,
         footer: 'If this keeps happening, check your API connection.',
+    });
+}
+
+function buildDiscordLinkRequiredEmbed() {
+    return buildEmbed({
+        title: `${EMOJI.warning} Discord Link Required`,
+        description: 'You must link this Discord account on the LurkedTV website before using bot commands.',
+        fields: [
+            { name: 'Link Path', value: 'Settings -> Account Status -> Link Discord', inline: false },
+        ],
+        color: COLORS.warning,
+        footer: 'After linking, run your command again.',
     });
 }
 
@@ -775,6 +1258,297 @@ async function handleRecentCommand(message, rawCount) {
 
 // ─── Runtime sync & heartbeat ──────────────────────────────────────────────────
 
+async function handleRefreshCommand(message, rawSourceId) {
+    const nodecastToken = await getNodecastTokenForDiscordUser(message.author.id);
+    const parsedSourceId = toPositiveInt(rawSourceId);
+    const wantsAll = !rawSourceId || String(rawSourceId).toLowerCase() === 'all';
+
+    if (!wantsAll && !parsedSourceId) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} Invalid Source`,
+                    description: `Use \`${prefix}refresh\`, \`${prefix}refresh all\`, or \`${prefix}refresh 3\`.`,
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    if (wantsAll) {
+        const sourceList = await apiGet('/api/sources', nodecastToken);
+        const enabledSources = Array.isArray(sourceList) ? sourceList.filter(s => s?.enabled) : [];
+        const enabledCount = enabledSources.length;
+        if (!enabledCount) {
+            await message.reply({
+                embeds: [
+                    buildEmbed({
+                        title: `${EMOJI.warning} No Enabled Sources`,
+                        description: 'There are no enabled sources to refresh.',
+                        color: COLORS.warning,
+                    }),
+                ],
+            });
+            return;
+        }
+
+        const startedAfterMs = Date.now();
+        const sourceIds = enabledSources.map(s => String(s.id));
+        const sourceNameById = Object.fromEntries(enabledSources.map(s => [String(s.id), sanitizeEmbedText(s?.name, `Source ${s?.id}`)]));
+        const requesterLabel = `${message.author.username} (<@${message.author.id}>)`;
+        const playlistPreview = enabledSources
+            .map((s) => sanitizeEmbedText(s?.name, `Source ${s?.id}`))
+            .slice(0, 8);
+        const playlistLines = playlistPreview.map((name) => `- ${name}`);
+        if (enabledSources.length > playlistPreview.length) {
+            playlistLines.push(`...and ${enabledSources.length - playlistPreview.length} more`);
+        }
+        await apiPost('/api/sources/sync-all', nodecastToken, {});
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.updated} Refreshing All Playlists`,
+                    description: `Refreshing ${enabledCount} enabled playlist${enabledCount === 1 ? '' : 's'}.`,
+                    fields: [
+                        { name: 'Requested By', value: requesterLabel, inline: true },
+                        { name: 'Playlists', value: `${formatCount(enabledCount)}`, inline: true },
+                        { name: 'Queue', value: playlistLines.join('\n'), inline: false },
+                    ],
+                    color: COLORS.success,
+                    authorName: 'LurkedTV Refresh',
+                }),
+            ],
+        });
+        monitorRefreshAndNotify({
+            message,
+            token: nodecastToken,
+            sourceIds,
+            sourceNameById,
+            startedAfterMs,
+            scopeLabel: `all enabled sources (${enabledCount})`,
+            requestedByLabel: requesterLabel,
+        }).catch(() => {});
+        return;
+    }
+
+    const source = await apiGet(`/api/sources/${parsedSourceId}`, nodecastToken);
+    const sourceName = sanitizeEmbedText(source?.name, String(parsedSourceId));
+    const requesterLabel = `${message.author.username} (<@${message.author.id}>)`;
+    const startedAfterMs = Date.now();
+    await apiPost(`/api/sources/${parsedSourceId}/sync`, nodecastToken, {});
+
+    await message.reply({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.updated} Refreshing ${sourceName}`,
+                description: `Refreshing playlist **${sourceName}** (ID: \`${parsedSourceId}\`).`,
+                fields: [
+                    { name: 'Requested By', value: requesterLabel, inline: true },
+                    { name: 'Playlist', value: `${sourceName} (ID: \`${parsedSourceId}\`)`, inline: true },
+                ],
+                color: COLORS.success,
+                authorName: 'LurkedTV Refresh',
+            }),
+        ],
+    });
+    monitorRefreshAndNotify({
+        message,
+        token: nodecastToken,
+        sourceIds: [String(parsedSourceId)],
+        sourceNameById: { [String(parsedSourceId)]: sourceName },
+        startedAfterMs,
+        scopeLabel: sourceName,
+        requestedByLabel: requesterLabel,
+    }).catch(() => {});
+}
+
+async function handleMustWatchCommand(message, rawCount) {
+    const nodecastToken = await getNodecastTokenForDiscordUser(message.author.id);
+    const requestedCount = Number(rawCount);
+    const count = Number.isFinite(requestedCount) ? Math.max(1, Math.min(10, requestedCount)) : 5;
+
+    const picks = await getMustWatchMovies(nodecastToken, message.author.id, count);
+    if (!picks.length) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.film} Must Watch`,
+                    description: 'No unseen must-watch picks left right now. You have likely cycled through available recommendations.',
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const resolvedLinks = await Promise.all(
+        picks.map(async (movie) => {
+            try {
+                const url = await resolveCatalogMovieStreamLink(nodecastToken, movie);
+                return { movie, url };
+            } catch (_) {
+                return { movie, url: null };
+            }
+        })
+    );
+
+    const embeds = resolvedLinks.map(({ movie, url }, idx) => {
+        const ratingLabel = formatRatingLabel(movie.rating);
+        const yearLabel = movie.year ? ` (${movie.year})` : '';
+        const when = movie.addedAtMs > 0 ? `<t:${Math.floor(movie.addedAtMs / 1000)}:R>` : 'unknown';
+        const poster = sanitizeEmbedText(movie.poster, '');
+        const thumbnail = sanitizeEmbedText(movie.thumbnail, '');
+        const hasPoster = poster.startsWith('http://') || poster.startsWith('https://');
+        const hasThumbnail = thumbnail.startsWith('http://') || thumbnail.startsWith('https://');
+        const watchLine = url ? `${EMOJI.link} [Watch](${url})` : `${EMOJI.link} Watch link unavailable`;
+
+        return buildEmbed({
+            title: `${EMOJI.film} #${idx + 1} of ${resolvedLinks.length} - ${movie.title}${yearLabel}`,
+            description: `${EMOJI.sparkle} Rating: **${ratingLabel}**\n${EMOJI.clock} Added: ${when}\n${watchLine}`,
+            color: COLORS.primary,
+            image: hasPoster ? poster : undefined,
+            thumbnail: !hasPoster && hasThumbnail ? thumbnail : undefined,
+            footer: `${message.author.username}  -  Must Watch`,
+            authorName: 'LurkedTV Recommendations',
+        });
+    });
+
+    await markMoviesAsSeenForUser(message.author.id, resolvedLinks.map(r => r.movie));
+    await message.reply({ embeds });
+}
+
+async function handleMustWatchResetCommand(message) {
+    const removed = await resetSeenMoviesForUser(message.author.id);
+    await message.reply({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.success} Must Watch Reset`,
+                description: `Cleared **${removed}** seen-item records for your account.`,
+                color: COLORS.success,
+                footer: `Requested by ${message.author.username}`,
+                authorName: 'LurkedTV Recommendations',
+            }),
+        ],
+    });
+}
+
+async function handleClearCommand(message, rawTarget) {
+    if (!message.guild || !message.channel || !message.channel.isTextBased()) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} Guild Command Only`,
+                    description: 'This command can only be used in server text channels.',
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const memberPerms = message.member?.permissions;
+    const userCanManage = Boolean(
+        memberPerms?.has(PermissionsBitField.Flags.ManageMessages) ||
+        memberPerms?.has(PermissionsBitField.Flags.Administrator)
+    );
+    if (!userCanManage) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.error} Permission Required`,
+                    description: 'You need **Manage Messages** permission to use this command.',
+                    color: COLORS.error,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const botPerms = message.guild.members.me?.permissionsIn(message.channel);
+    const botCanManage = Boolean(
+        botPerms?.has(PermissionsBitField.Flags.ManageMessages) &&
+        botPerms?.has(PermissionsBitField.Flags.ReadMessageHistory)
+    );
+    if (!botCanManage) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.error} Missing Bot Permission`,
+                    description: 'I need **Manage Messages** and **Read Message History** in this channel.',
+                    color: COLORS.error,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const requested = Number.parseInt(String(rawTarget ?? '').trim(), 10);
+    const count = Number.isFinite(requested) ? Math.max(1, Math.min(99, requested)) : 10;
+    const toDelete = Math.min(100, count + 1); // include the clear command message
+
+    const deleted = await message.channel.bulkDelete(toDelete, true);
+    const removed = Math.max(0, (deleted?.size || 0) - 1);
+    const confirmation = await message.channel.send({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.success} Channel Cleared`,
+                description: `Deleted **${removed}** message(s).`,
+                color: COLORS.success,
+                footer: 'Only messages newer than 14 days can be bulk deleted.',
+            }),
+        ],
+    });
+
+    setTimeout(() => {
+        confirmation.delete().catch(() => {});
+    }, 5000);
+}
+
+async function handlePrefixCommand(message, rawNewPrefix) {
+    const requested = sanitizeEmbedText(rawNewPrefix, '');
+
+    if (!requested) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.gear} Current Prefix`,
+                    description: `Current prefix is \`${prefix}\`.\nUsage: \`${prefix}prefix ?\``,
+                    color: COLORS.info,
+                }),
+            ],
+        });
+        return;
+    }
+
+    if (/\s/.test(requested) || requested.length > 3) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} Invalid Prefix`,
+                    description: 'Prefix must be 1-3 non-space characters.',
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const oldPrefix = prefix;
+    prefix = requested;
+
+    await message.reply({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.success} Prefix Updated`,
+                description: `Prefix changed from \`${oldPrefix}\` to \`${prefix}\`.`,
+                color: COLORS.success,
+                footer: 'Runtime change (resets on bot restart unless server runtime config overrides).',
+            }),
+        ],
+    });
+}
+
 async function syncRuntimeConfigFromServer() {
     if (!NODECAST_DISCORD_AUTH_SECRET) return;
     try {
@@ -811,7 +1585,7 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     console.log(`[DiscordBot] Logged in as ${client.user.tag}`);
     console.log(`[DiscordBot] Prefix: ${prefix}`);
     console.log(`[DiscordBot] Target guild: ${TARGET_GUILD_ID || '(not set)'}`);
@@ -840,13 +1614,39 @@ client.on('messageCreate', async (message) => {
 
     const [rawCommand, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
     const command = (rawCommand || '').toLowerCase();
+    const knownCommands = new Set([
+        'download',
+        'status', 'nowplaying',
+        'recent', 'history',
+        'refresh', 'sync', 'resync',
+        'mustwatch', 'must-watch', 'mw',
+        'mwreset', 'resetmw', 'mwclear',
+        'clear',
+        'prefix', 'setprefix',
+        'ping', 'latency',
+        'help', 'commands', 'cmds',
+        '',
+    ]);
 
     try {
+        if (knownCommands.has(command)) {
+            const linkedToken = await getNodecastTokenFromDiscordLink(message.author.id);
+            if (!linkedToken) {
+                await message.reply({ embeds: [buildDiscordLinkRequiredEmbed()] });
+                return;
+            }
+        }
+
         if (command === 'download') { await handleDownloadCommand(message); return; }
         if (command === 'status' || command === 'nowplaying') { await handleStatusCommand(message); return; }
         if (command === 'recent' || command === 'history') { await handleRecentCommand(message, args[0]); return; }
+        if (command === 'refresh' || command === 'sync' || command === 'resync') { await handleRefreshCommand(message, args[0]); return; }
+        if (command === 'mustwatch' || command === 'must-watch' || command === 'mw') { await handleMustWatchCommand(message, args[0]); return; }
+        if (command === 'mwreset' || command === 'resetmw' || command === 'mwclear') { await handleMustWatchResetCommand(message); return; }
+        if (command === 'clear') { await handleClearCommand(message, args[0]); return; }
+        if (command === 'prefix' || command === 'setprefix') { await handlePrefixCommand(message, args[0]); return; }
 
-        if (command === 'ping') {
+        if (command === 'ping' || command === 'latency') {
             const latency = Date.now() - message.createdTimestamp;
             await message.reply({
                 embeds: [
@@ -861,7 +1661,7 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
-        if (command === 'help' || command === '') {
+        if (command === 'help' || command === 'commands' || command === 'cmds' || command === '') {
             await message.reply({ embeds: [buildHelpEmbed()] });
             return;
         }

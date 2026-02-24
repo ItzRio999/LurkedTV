@@ -35,6 +35,79 @@ router.get('/status', async (req, res) => {
     }
 });
 
+// Get processed item stats for one or more sources
+// GET /api/sources/stats?sourceIds=1,2,3
+router.get('/stats', async (req, res) => {
+    try {
+        const sourceIdsRaw = String(req.query.sourceIds || '').trim();
+        const parsedIds = sourceIdsRaw
+            ? sourceIdsRaw
+                .split(',')
+                .map(id => Number.parseInt(String(id).trim(), 10))
+                .filter(id => Number.isFinite(id) && id > 0)
+            : [];
+
+        const sourceIds = [...new Set(parsedIds)];
+        if (!sourceIds.length) {
+            return res.json({ stats: [], totals: { channels: 0, programmes: 0, movies: 0, series: 0, items: 0 } });
+        }
+
+        const db = getDb();
+        const placeholders = sourceIds.map(() => '?').join(',');
+        const itemRows = db.prepare(`
+            SELECT
+                source_id,
+                SUM(CASE WHEN type = 'live' THEN 1 ELSE 0 END) AS channels,
+                SUM(CASE WHEN type = 'movie' THEN 1 ELSE 0 END) AS movies,
+                SUM(CASE WHEN type = 'series' THEN 1 ELSE 0 END) AS series
+            FROM playlist_items
+            WHERE source_id IN (${placeholders})
+            GROUP BY source_id
+        `).all(...sourceIds);
+
+        const epgRows = db.prepare(`
+            SELECT source_id, COUNT(*) AS programmes
+            FROM epg_programs
+            WHERE source_id IN (${placeholders})
+            GROUP BY source_id
+        `).all(...sourceIds);
+
+        const itemBySource = new Map(itemRows.map(row => [Number(row.source_id), row]));
+        const epgBySource = new Map(epgRows.map(row => [Number(row.source_id), row]));
+
+        const stats = sourceIds.map((sourceId) => {
+            const item = itemBySource.get(sourceId) || {};
+            const epg = epgBySource.get(sourceId) || {};
+            const channels = Number(item.channels || 0);
+            const movies = Number(item.movies || 0);
+            const series = Number(item.series || 0);
+            const programmes = Number(epg.programmes || 0);
+            return {
+                sourceId,
+                channels,
+                programmes,
+                movies,
+                series,
+                items: channels + movies + series,
+            };
+        });
+
+        const totals = stats.reduce((acc, row) => {
+            acc.channels += row.channels;
+            acc.programmes += row.programmes;
+            acc.movies += row.movies;
+            acc.series += row.series;
+            acc.items += row.items;
+            return acc;
+        }, { channels: 0, programmes: 0, movies: 0, series: 0, items: 0 });
+
+        res.json({ stats, totals });
+    } catch (err) {
+        console.error('Error getting source stats:', err);
+        res.status(500).json({ error: 'Failed to get source stats' });
+    }
+});
+
 // Get sources by type
 router.get('/type/:type', async (req, res) => {
     try {

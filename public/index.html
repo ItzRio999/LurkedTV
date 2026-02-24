@@ -565,6 +565,12 @@
               <h3>Account Status</h3>
               <div class="setting-item account-status-item">
                 <div class="setting-info">
+                  <span class="setting-label">Username</span>
+                  <span class="setting-hint" id="account-username">-</span>
+                </div>
+              </div>
+              <div class="setting-item account-status-item">
+                <div class="setting-info">
                   <span class="setting-label">Email</span>
                   <span class="setting-hint" id="account-email">-</span>
                 </div>
@@ -612,6 +618,22 @@
                 </select>
                 <span class="setting-hint">Applied by default on Movies and Series pages.</span>
               </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Change Username</h3>
+              <form id="account-username-form" class="account-password-form">
+                <div class="setting-item account-settings-stack">
+                  <label for="setting-new-username" class="setting-label">New Username</label>
+                  <input type="text" id="setting-new-username" class="form-input" autocomplete="username" minlength="3"
+                    maxlength="32" required>
+                  <span class="setting-hint">3-32 chars. Letters, numbers, dot, underscore, and dash only.</span>
+                </div>
+                <div class="account-actions-row">
+                  <button type="submit" class="btn btn-primary">Update Username</button>
+                  <span class="hint" id="account-username-feedback"></span>
+                </div>
+              </form>
             </div>
 
             <div class="settings-section">
@@ -731,7 +753,12 @@
               <h3>Encoder Settings</h3>
               <div class="setting-item">
                 <div class="setting-info" style="flex: 1;">
-                  <span class="setting-label">Hardware Encoder</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Hardware Encoder</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Hardware Encoder help" title="Auto is best for most users.
+Choose NVENC/AMF/QSV/VAAPI only if you know your GPU path.
+If playback fails, switch to Software (CPU) for maximum compatibility.">?</button>
+                  </span>
                   <span class="setting-hint">Select which GPU encoder to use for transcoding. Auto will use the best
                     available.</span>
                 </div>
@@ -828,7 +855,23 @@
                   <span class="toggle-slider"></span>
                 </label>
                 <div class="setting-info">
-                  <span class="setting-label">HAGS Optimization Hint</span>
+                  <span class="setting-label setting-label-row">
+                    <span>HAGS Optimization Hint</span>
+                    <button
+                      type="button"
+                      class="setting-tooltip-trigger"
+                      aria-label="How to enable Hardware-Accelerated GPU Scheduling (HAGS)"
+                      title="How to enable HAGS in Windows:
+1) Open Windows Settings.
+2) Go to System > Display > Graphics.
+3) Click Default graphics settings.
+4) Turn on Hardware-Accelerated GPU Scheduling.
+5) Restart your PC.
+
+Then come back here and enable this HAGS Optimization Hint toggle so LurkedTV can use lower-latency GPU tuning.">
+                      ?
+                    </button>
+                  </span>
                   <span class="setting-hint">Enable this only if Hardware-Accelerated GPU Scheduling is already enabled in Windows. This does not change OS-level HAGS automatically.</span>
                 </div>
               </div>
@@ -838,7 +881,12 @@
                   <span class="toggle-slider"></span>
                 </label>
                 <div class="setting-info">
-                  <span class="setting-label">Auto Transcode (Smart)</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Auto Transcode (Smart)</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Auto Transcode help" title="Recommended for most users.
+The app probes each stream and only transcodes/remuxes when needed.
+Disable if you want fastest startup and prefer manual controls below.">?</button>
+                  </span>
                   <span class="setting-hint">Automatically detect stream codecs and only transcode/remux when needed.
                     Adds ~1-3s probe delay on first play.</span>
                 </div>
@@ -849,7 +897,12 @@
                   <span class="toggle-slider"></span>
                 </label>
                 <div class="setting-info">
-                  <span class="setting-label">Force Audio Transcode</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Force Audio Transcode</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Force Audio Transcode help" title="Use when video plays but audio is missing or unsupported.
+Converts audio to AAC for browser compatibility.
+Keep off when audio already works to reduce processing load.">?</button>
+                  </span>
                   <span class="setting-hint">Transcode audio to AAC for browser compatibility. Enable if you get video
                     but no audio (fixes Dolby/AC3/EAC3).</span>
                 </div>
@@ -860,7 +913,12 @@
                   <span class="toggle-slider"></span>
                 </label>
                 <div class="setting-info">
-                  <span class="setting-label">Force Video Transcode</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Force Video Transcode</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Force Video Transcode help" title="Use only for hard compatibility issues.
+Good for unsupported video codecs, severe stutter, or burn-in subtitle workflows.
+Highest CPU/GPU usage of all options.">?</button>
+                  </span>
                   <span class="setting-hint">Force full video transcoding (burn-in subtitles, incompatible video).
                     Uses
                     HW encoder.</span>
@@ -872,14 +930,24 @@
                   <span class="toggle-slider"></span>
                 </label>
                 <div class="setting-info">
-                  <span class="setting-label">Force Remux</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Force Remux</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Force Remux help" title="Repackages the stream container without full re-encoding.
+Use when codec is fine but container causes seek/buffer/player issues.
+Usually lighter than full transcoding.">?</button>
+                  </span>
                   <span class="setting-hint">Remux streams to MP4 container. Enable for raw .ts streams from IPTV
                     middleware like m3u-editor or dispatcharr.</span>
                 </div>
               </div>
               <div class="setting-item">
                 <div class="setting-info" style="flex: 1;">
-                  <span class="setting-label">Stream Output Format</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Stream Output Format</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Stream Output Format help" title="m3u8 (HLS): best browser compatibility and adaptive buffering.
+ts (MPEG-TS): lower overhead and can start faster on some sources.
+If one buffers badly, try the other.">?</button>
+                  </span>
                   <span class="setting-hint">Container format for Xtream streams. Try TS if you experience buffering
                     issues.</span>
                 </div>
@@ -923,7 +991,12 @@
                   <span class="toggle-slider"></span>
                 </label>
                 <div class="setting-info">
-                  <span class="setting-label">Force Backend Proxy</span>
+                  <span class="setting-label setting-label-row">
+                    <span>Force Backend Proxy</span>
+                    <button type="button" class="setting-tooltip-trigger" aria-label="Force Backend Proxy help" title="Routes streams through your server instead of direct browser requests.
+Use for CORS issues, provider blocking, or inconsistent direct playback.
+Can increase server bandwidth and CPU usage.">?</button>
+                  </span>
                   <span class="setting-hint">Route all streams through the server to bypass CORS restrictions. Enable if
                     streams don't play directly.</span>
                 </div>

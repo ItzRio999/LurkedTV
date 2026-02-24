@@ -845,7 +845,7 @@ class VideoPlayer {
         } catch (err) {
             console.error('[Player] Session start failed:', err);
             // Fallback to direct transcode if session fails
-            return `/api/transcode?url=${encodeURIComponent(url)}`;
+            return window.API?.resolveMediaUrl?.(url) || url;
         }
     }
 
@@ -913,7 +913,7 @@ class VideoPlayer {
                             track.kind = 'subtitles';
                             track.label = sub.title;
                             track.srclang = sub.language;
-                            track.src = `/api/subtitle?url=${encodeURIComponent(streamUrl)}&index=${sub.index}`;
+                            track.src = sub.url || (window.API?.resolveMediaUrl?.(streamUrl) || streamUrl);
                             this.video.appendChild(track);
                         });
 
@@ -953,7 +953,7 @@ class VideoPlayer {
                         // Raw .ts container - use remux
                         console.log('[Player] Auto: Using remux (.ts container)');
                         this.updateTranscodeStatus('remuxing', 'Remux (Auto)');
-                        const remuxUrl = `/api/remux?url=${encodeURIComponent(streamUrl)}`;
+                        const remuxUrl = window.API?.resolveMediaUrl?.(streamUrl) || streamUrl;
                         this.currentUrl = remuxUrl;
                         this.video.src = remuxUrl;
                         this.video.play().catch(e => {
@@ -1372,14 +1372,14 @@ class VideoPlayer {
      * Get proxied URL for a stream
      */
     getProxiedUrl(url) {
-        return `/api/proxy/stream?url=${encodeURIComponent(url)}`;
+        return window.API?.resolveMediaUrl?.(url) || url;
     }
 
     /**
      * Get transcoded URL for a stream (audio transcoding for browser compatibility)
      */
     getTranscodeUrl(url) {
-        return `/api/transcode?url=${encodeURIComponent(url)}`;
+        return window.API?.resolveMediaUrl?.(url) || url;
     }
 
     /**
@@ -1387,7 +1387,7 @@ class VideoPlayer {
      * Used for raw .ts streams that browsers can't play directly
      */
     getRemuxUrl(url) {
-        return `/api/remux?url=${encodeURIComponent(url)}`;
+        return window.API?.resolveMediaUrl?.(url) || url;
     }
 
     /**

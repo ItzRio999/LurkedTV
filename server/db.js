@@ -99,7 +99,7 @@ function getDefaultSettings() {
     autoProfileAppliedAt: null,
     autoProfileSummary: '',
     // Discord bot configuration
-    discordBotPrefix: '!',
+    discordBotPrefix: '.',
     discordGuildId: '1356477545964372048',
     discordAdminRoleId: '1356477545989799990',
     discordLogChannelId: '',
@@ -111,6 +111,7 @@ function getDefaultSettings() {
 function computeAutoProfileFromHardware(hw) {
   const cpu = hw?.cpu || {};
   const recommended = hw?.recommended || 'software';
+  const hagsEnabled = hw?.hags?.enabled === true;
   const logicalThreads = cpu.logicalThreads || 4;
   const memoryGb = cpu.totalMemoryGb || 8;
   const hasGpu = recommended !== 'software';
@@ -144,6 +145,7 @@ function computeAutoProfileFromHardware(hw) {
     hwEncoder: hasGpu ? 'auto' : 'software',
     maxResolution,
     quality,
+    ...(hagsEnabled ? { hagsEnabled: true } : {}),
     autoTranscode: true,
     forceTranscode: false,
     forceVideoTranscode: false,
@@ -156,7 +158,7 @@ function computeAutoProfileFromHardware(hw) {
     upscaleTarget,
     probeCacheTTL: hasGpu ? 600 : 300,
     seriesProbeCacheDays: 7,
-    autoProfileSummary: `${hasGpu ? 'GPU+CPU' : 'CPU-only'} profile (${recommended}, ${logicalThreads} threads, ${memoryGb}GB RAM)`
+    autoProfileSummary: `${hasGpu ? 'GPU+CPU' : 'CPU-only'} profile (${recommended}, ${logicalThreads} threads, ${memoryGb}GB RAM${hagsEnabled ? ', HAGS on' : ''})`
   };
 }
 

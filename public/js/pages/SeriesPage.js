@@ -32,6 +32,10 @@ class SeriesPage {
         this.showFavoritesOnly = false;
         this.categoryNameMap = new Map();
         this.detailsBackdropLoadId = 0;
+        this.externalMetadataByKey = new Map();
+        this.smartMetadataRequestSeq = 0;
+        this.skipNextSmartMetadataRefresh = false;
+        this.lastSmartMetadataSignature = '';
 
         this.init();
     }
@@ -314,6 +318,73 @@ class SeriesPage {
         return 0;
     }
 
+    normalizeCatalogTitle(rawTitle) {
+        let title = String(rawTitle || '').trim();
+        if (!title) return '';
+
+        const prefixPattern = /^(?:\[[^\]]+\]\s*|\([^)]+\)\s*|(?:EN|ENG|MULTI|MULTI-SUB|SUB|DUB|4K|UHD|FHD|HD|SD|AMZ|NF|NETFLIX|DSNP|DSNP\+|HMAX|MAX|HULU|ATVP|APPLETV|WEB|WEB-DL|WEBRIP|BLURAY|BDRIP|HDRIP|DVDRIP|X264|X265|HEVC|AAC|DDP5\.1|DD5\.1|IMAX|EXTENDED|REMASTERED)(?:[\s._-]+))+/i;
+        while (prefixPattern.test(title)) {
+            title = title.replace(prefixPattern, '').trim();
+        }
+
+        title = title.replace(/^[-:|._\s]+/, '').trim();
+
+        return title
+            .toLowerCase()
+            .replace(/['"`]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+    }
+
+    getAddedMs(item) {
+        const raw = item?.last_modified || item?.added || item?.added_at || item?.releaseDate || item?.release_date || '';
+        if (raw === null || raw === undefined || raw === '') return 0;
+        const text = String(raw).trim();
+        if (!text) return 0;
+        if (/^\d{10,13}$/.test(text)) {
+            const n = Number(text);
+            return text.length <= 10 ? n * 1000 : n;
+        }
+        const parsed = Date.parse(text);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    pickPreferredSeries(existing, candidate) {
+        const score = (item) => {
+            const hasPoster = this.getSeriesPosterUrl(item) ? 1 : 0;
+            const rating = this.getSeriesRating10(item);
+            const votes = this.getSeriesVotes(item);
+            const year = this.getReleaseYear(item);
+            const addedMs = this.getAddedMs(item);
+            return (hasPoster * 4)
+                + (Math.max(0, Math.min(10, rating)) * 0.35)
+                + (Math.log10((votes || 0) + 1) * 0.4)
+                + ((year > 0 ? year : 0) * 0.001)
+                + ((addedMs > 0 ? addedMs : 0) * 0.0000000001);
+        };
+        return score(candidate) > score(existing) ? candidate : existing;
+    }
+
+    dedupeSeriesForAllCategories(items) {
+        const map = new Map();
+        for (const item of items) {
+            const normalizedTitle = this.normalizeCatalogTitle(item?.name || item?.title || '');
+            if (!normalizedTitle) {
+                map.set(`fallback:${item.sourceId}:${item.series_id}`, item);
+                continue;
+            }
+
+            const year = this.getReleaseYear(item);
+            const key = year > 0 ? `${normalizedTitle}:${year}` : normalizedTitle;
+            if (!map.has(key)) {
+                map.set(key, item);
+            } else {
+                map.set(key, this.pickPreferredSeries(map.get(key), item));
+            }
+        }
+        return Array.from(map.values());
+    }
+
     getSmartDiscoverScore(series, searchTerm = '') {
         const nowYear = new Date().getUTCFullYear();
         const ratingRaw = this.parseNumber(
@@ -338,6 +409,104 @@ class SeriesPage {
         const searchBonus = searchTerm && title.startsWith(searchTerm) ? 0.06 : 0;
 
         return (ratingNorm * 0.58) + (votesNorm * 0.22) + (recencyNorm * 0.16) + (isFav * 0.04) + searchBonus;
+    }
+
+    getCatalogEntityKey(item) {
+        const normalizedTitle = this.normalizeCatalogTitle(item?.name || item?.title || '');
+        const year = this.getReleaseYear(item);
+        if (normalizedTitle) {
+            return year > 0 ? `${normalizedTitle}:${year}` : normalizedTitle;
+        }
+        return `fallback:${item?.sourceId || 'na'}:${item?.series_id || item?.id || 'na'}`;
+    }
+
+    getExternalDiscoverScore(series) {
+        const key = `series:${this.getCatalogEntityKey(series)}`;
+        const metadata = this.externalMetadataByKey.get(key);
+        return this.parseNumber(metadata?.smart?.score, 0);
+    }
+
+    getSmartSortScore(series, searchTerm = '') {
+        const baseScore = this.getSmartDiscoverScore(series, searchTerm);
+        const externalScore = this.getExternalDiscoverScore(series);
+        return (baseScore * 0.62) + (externalScore * 0.38);
+    }
+
+    applyExternalMetadataToSeries(series, metadata) {
+        if (!series || !metadata) return;
+        const merged = metadata.merged || {};
+        if (merged.plot && !series.plot && !series.description && !series.overview) series.plot = merged.plot;
+        if (merged.genre && !series.genre) series.genre = merged.genre;
+        if (merged.director && !series.director) series.director = merged.director;
+        if (merged.cast && !series.cast && !series.actors) series.cast = merged.cast;
+        if (merged.runtime && !series.duration && !series.runtime) series.runtime = merged.runtime;
+        if (merged.poster && !this.getSeriesPosterUrl(series)) series.cover = merged.poster;
+        if (merged.backdrop && !series.backdrop_path && !series.backdrop) series.backdrop_path = merged.backdrop;
+    }
+
+    sortSeriesForDiscover(searchTerm = '') {
+        this.filteredSeries.sort((a, b) => {
+            const scoreDelta = this.getSmartSortScore(b, searchTerm) - this.getSmartSortScore(a, searchTerm);
+            if (Math.abs(scoreDelta) > 0.0001) return scoreDelta;
+
+            const yearDelta = this.getReleaseYear(b) - this.getReleaseYear(a);
+            if (yearDelta !== 0) return yearDelta;
+
+            const ratingDelta = this.getSeriesRating10(b) - this.getSeriesRating10(a);
+            if (ratingDelta !== 0) return ratingDelta;
+
+            const votesDelta = this.getSeriesVotes(b) - this.getSeriesVotes(a);
+            if (votesDelta !== 0) return votesDelta;
+
+            return (a.name || '').localeCompare(b.name || '');
+        });
+    }
+
+    async scheduleSmartMetadataEnrichment(items) {
+        if (!Array.isArray(items) || items.length === 0 || !API?.metadata?.enrichBatch) return;
+
+        const candidates = items.slice(0, 120).map((series) => ({
+            id: this.getCatalogEntityKey(series),
+            title: series?.name || series?.title || '',
+            year: this.getReleaseYear(series),
+            localRating: this.getSeriesRating10(series),
+            localVotes: this.getSeriesVotes(series),
+            series
+        })).filter(row => row.id && row.title);
+
+        if (candidates.length === 0) return;
+
+        const signature = `series:${candidates.map(c => c.id).join('|')}`;
+        if (signature === this.lastSmartMetadataSignature) return;
+        this.lastSmartMetadataSignature = signature;
+
+        const requestId = ++this.smartMetadataRequestSeq;
+        try {
+            const payload = candidates.map(({ id, title, year, localRating, localVotes }) => ({
+                id, title, year, localRating, localVotes
+            }));
+            const response = await API.metadata.enrichBatch('series', payload);
+            if (requestId !== this.smartMetadataRequestSeq) return;
+
+            let changed = false;
+            candidates.forEach(({ id, series }) => {
+                const metadata = response?.items?.[id];
+                if (!metadata) return;
+                const mapKey = `series:${id}`;
+                const prevScore = this.parseNumber(this.externalMetadataByKey.get(mapKey)?.smart?.score, 0);
+                const nextScore = this.parseNumber(metadata?.smart?.score, 0);
+                if (Math.abs(nextScore - prevScore) > 0.0001) changed = true;
+                this.externalMetadataByKey.set(mapKey, metadata);
+                this.applyExternalMetadataToSeries(series, metadata);
+            });
+
+            if (changed) {
+                this.skipNextSmartMetadataRefresh = true;
+                this.filterAndRender();
+            }
+        } catch (err) {
+            console.warn('Series metadata enrichment failed:', err?.message || err);
+        }
     }
 
     getSeriesRating10(series) {
@@ -471,6 +640,72 @@ class SeriesPage {
             if (url) return url;
         }
         return '';
+    }
+
+    getExternalProviderSummary(externalMetadata) {
+        const providers = externalMetadata?.smart?.providers || {};
+        const parts = [];
+        if (providers.local) parts.push('Provider');
+        if (providers.tmdb) parts.push('TMDB');
+        if (providers.omdb) parts.push('OMDb');
+        if (!parts.length) return '';
+        return parts.join(' + ');
+    }
+
+    async getSeriesExternalMetadata(series) {
+        if (!series || !API?.metadata?.enrichBatch) return null;
+
+        const id = this.getCatalogEntityKey(series);
+        const mapKey = `series:${id}`;
+        if (this.externalMetadataByKey.has(mapKey)) {
+            return this.externalMetadataByKey.get(mapKey) || null;
+        }
+
+        try {
+            const payload = [{
+                id,
+                title: series?.name || series?.title || '',
+                year: this.getReleaseYear(series),
+                localRating: this.getSeriesRating10(series),
+                localVotes: this.getSeriesVotes(series)
+            }];
+            const response = await API.metadata.enrichBatch('series', payload);
+            const metadata = response?.items?.[id] || null;
+            if (metadata) {
+                this.externalMetadataByKey.set(mapKey, metadata);
+                this.applyExternalMetadataToSeries(series, metadata);
+            }
+            return metadata;
+        } catch (err) {
+            console.warn('Series detail metadata enrichment failed:', err?.message || err);
+            return null;
+        }
+    }
+
+    getMergedSeriesData(series, info = null, externalMetadata = null) {
+        const merged = {
+            ...series,
+            ...(info?.info || {})
+        };
+
+        const external = externalMetadata?.merged || {};
+        if (external.plot && !merged.plot && !merged.description && !merged.overview) merged.plot = external.plot;
+        if (external.genre && !merged.genre) merged.genre = external.genre;
+        if (external.director && !merged.director) merged.director = external.director;
+        if (external.cast && !merged.cast && !merged.actors) merged.cast = external.cast;
+        if (external.runtime && !merged.duration && !merged.runtime) merged.runtime = external.runtime;
+        if (external.poster && !this.getSeriesPosterUrl(merged)) merged.cover = external.poster;
+        if (external.backdrop && !merged.backdrop_path && !merged.backdrop) merged.backdrop_path = external.backdrop;
+
+        const smart = externalMetadata?.smart || {};
+        const smartRating = this.parseNumber(smart.rating10, 0);
+        const smartVotes = Math.max(0, Math.floor(this.parseNumber(smart.votes, 0)));
+        const smartYear = this.parseNumber(smart.year, 0);
+        if (smartRating > 0 && this.getSeriesRating10(merged) <= 0) merged.rating = smartRating;
+        if (smartVotes > 0 && this.getSeriesVotes(merged) <= 0) merged.votes = smartVotes;
+        if (smartYear > 0 && this.getReleaseYear(merged) <= 0) merged.year = smartYear;
+
+        return merged;
     }
 
     async getSeriesInfo(sourceId, seriesId) {
@@ -649,18 +884,15 @@ class SeriesPage {
         });
 
         if (isAllCategories) {
-            this.filteredSeries.sort((a, b) => {
-                const scoreDelta = this.getSmartDiscoverScore(b, searchTerm) - this.getSmartDiscoverScore(a, searchTerm);
-                if (Math.abs(scoreDelta) > 0.0001) return scoreDelta;
-
-                const yearDelta = this.getReleaseYear(b) - this.getReleaseYear(a);
-                if (yearDelta !== 0) return yearDelta;
-
-                const ratingDelta = this.parseNumber(b.rating, 0) - this.parseNumber(a.rating, 0);
-                if (ratingDelta !== 0) return ratingDelta;
-
-                return (a.name || '').localeCompare(b.name || '');
-            });
+            this.filteredSeries = this.dedupeSeriesForAllCategories(this.filteredSeries);
+            this.sortSeriesForDiscover(searchTerm);
+            if (this.skipNextSmartMetadataRefresh) {
+                this.skipNextSmartMetadataRefresh = false;
+            } else {
+                this.scheduleSmartMetadataEnrichment(this.filteredSeries);
+            }
+        } else {
+            this.lastSmartMetadataSignature = '';
         }
 
         console.log(`[Series] Displaying ${this.filteredSeries.length} of ${this.seriesList.length} series`);
@@ -832,8 +1064,24 @@ class SeriesPage {
 
         try {
             // Fetch series info (seasons/episodes)
-            const info = await this.getSeriesInfo(series.sourceId, series.series_id);
-            const merged = { ...series, ...(info?.info || {}) };
+            let info = null;
+            let externalMetadata = null;
+            const [infoResult, externalResult] = await Promise.allSettled([
+                this.getSeriesInfo(series.sourceId, series.series_id),
+                this.getSeriesExternalMetadata(series)
+            ]);
+            if (infoResult.status === 'fulfilled') {
+                info = infoResult.value;
+            } else if (infoResult.reason) {
+                throw infoResult.reason;
+            }
+            if (externalResult.status === 'fulfilled') {
+                externalMetadata = externalResult.value;
+            }
+
+            const merged = this.getMergedSeriesData(series, info, externalMetadata);
+            document.getElementById('series-poster').src = this.getSeriesPosterUrl(merged) || '/img/LurkedTV.png';
+            document.getElementById('series-title').textContent = merged.name || series.name;
             this.setDetailsBackdrop(this.getSeriesBackdropUrl(merged));
             const seasonsObj = info?.episodes || {};
             const seasonKeys = Object.keys(seasonsObj);
@@ -848,6 +1096,7 @@ class SeriesPage {
             const metaBits = [];
             if (year > 0) metaBits.push(`<span>${year}</span>`);
             if (totalEpisodes > 0) metaBits.push(`<span>${totalEpisodes} Episodes</span>`);
+            if (merged.duration || merged.runtime) metaBits.push(`<span>${merged.duration || merged.runtime}</span>`);
             if (merged.genre) metaBits.push(`<span>${merged.genre}</span>`);
             if (merged.country) metaBits.push(`<span>${merged.country}</span>`);
             if (merged.director) metaBits.push(`<span>Dir: ${merged.director}</span>`);
@@ -877,7 +1126,9 @@ class SeriesPage {
             } else {
                 document.getElementById('series-details-rating-score').textContent = 'Not Rated';
             }
-            document.getElementById('series-details-rating-count').textContent = this.formatVotes(votes);
+            const sourceSummary = this.getExternalProviderSummary(externalMetadata);
+            const baseVotes = this.formatVotes(votes);
+            document.getElementById('series-details-rating-count').textContent = sourceSummary ? `${baseVotes} • ${sourceSummary}` : baseVotes;
 
             this.currentSeries = merged;
             this.currentSeriesInfo = info;
@@ -907,7 +1158,7 @@ class SeriesPage {
                         ${episodes.map(ep => {
                             const episodeTitle = this.escapeHtml(ep.title || `Episode ${ep.episode_num}`);
                             const episodeNum = this.escapeHtml(ep.episode_num || '');
-                            const thumb = this.escapeHtml(this.getEpisodeThumb(ep, series.cover || ''));
+                            const thumb = this.escapeHtml(this.getEpisodeThumb(ep, merged.cover || series.cover || ''));
                             const duration = this.escapeHtml(ep.duration || ep.info?.duration || '');
                             const airDate = this.escapeHtml(this.formatEpisodeDate(ep.releaseDate || ep.release_date || ep.air_date || ep.info?.release_date));
                             const rating10 = this.getEpisodeRating10(ep);
