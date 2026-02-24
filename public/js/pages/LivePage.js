@@ -5,7 +5,14 @@
 class LivePage {
     constructor(app) {
         this.app = app;
+        this.liveLayout = document.querySelector('#page-live .home-layout');
+        this.liveEpgPanel = document.getElementById('live-epg-panel');
+        this.epgToggle = document.getElementById('live-epg-toggle');
+        this._epgViewActive = false;
         this.handleKeydown = this.handleKeydown.bind(this);
+        this.handleEpgToggle = this.handleEpgToggle.bind(this);
+
+        this.epgToggle?.addEventListener('change', this.handleEpgToggle);
     }
 
     async init() {
@@ -71,6 +78,7 @@ class LivePage {
     }
 
     handleKeydown(e) {
+        if (this._epgViewActive) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
         switch (e.key) {
@@ -99,10 +107,47 @@ class LivePage {
             await this.app.channelList.loadSources();
             await this.app.channelList.loadChannels();
         }
+
+        await this.setEpgMode(Boolean(this.epgToggle?.checked));
     }
 
     hide() {
         document.removeEventListener('keydown', this.handleKeydown);
+    }
+
+    async handleEpgToggle() {
+        await this.setEpgMode(Boolean(this.epgToggle?.checked));
+    }
+
+    async setEpgMode(enabled) {
+        if (this._epgViewActive === enabled) return;
+        this._epgViewActive = enabled;
+
+        this.liveLayout?.classList.toggle('hidden', enabled);
+        this.liveEpgPanel?.classList.toggle('hidden', !enabled);
+
+        if (enabled) {
+            document.getElementById('channel-sidebar')?.classList.remove('active');
+            document.getElementById('channel-sidebar-overlay')?.classList.remove('active');
+        }
+
+        if (enabled) {
+            await this.showEpgView();
+        }
+    }
+
+    async showEpgView() {
+        const channelList = this.app.channelList;
+        if (!channelList.channels || channelList.channels.length === 0) {
+            await channelList.loadSources();
+            await channelList.loadChannels();
+        }
+
+        if (!this.app.epgGuide.programmes || this.app.epgGuide.programmes.length === 0) {
+            await this.app.epgGuide.loadEpg();
+        } else {
+            this.app.epgGuide.render();
+        }
     }
 }
 

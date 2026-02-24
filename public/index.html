@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
-  <title>LurkedTv | IPTV Player</title>
+  <title>LurkedTV | IPTV Player</title>
   <meta name="description" content="Stream live TV, movies, and series with EPG support">
   <link rel="icon" type="image/png" href="/img/LurkedTV.png?v=2">
   <link rel="shortcut icon" type="image/png" href="/img/LurkedTV.png?v=2">
@@ -36,9 +36,9 @@
       <!-- Left: Brand -->
       <div class="navbar-brand">
         <span class="logo">
-          <img src="/img/LurkedTV.png" alt="LurkedTv logo">
+          <img src="/img/LurkedTV.png" alt="LurkedTV logo">
         </span>
-        <span class="brand-text">LurkedTv</span>
+        <span class="brand-text">LurkedTV</span>
         <span id="version-badge" class="version-badge"></span>
       </div>
 
@@ -59,10 +59,6 @@
         <a href="#" class="nav-link" data-page="series">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg></span>
           <span>Series</span>
-        </a>
-        <a href="#" class="nav-link" data-page="guide">
-          <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg></span>
-          <span>Guide</span>
         </a>
       </div>
 
@@ -126,10 +122,6 @@
         <a href="#" class="nav-link" data-page="series">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg></span>
           <span>Series</span>
-        </a>
-        <a href="#" class="nav-link" data-page="guide">
-          <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg></span>
-          <span>Guide</span>
         </a>
         <a href="#" class="nav-link" data-page="settings">
           <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L3.16 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.58 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></span>
@@ -211,6 +203,10 @@
                         d="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z" />
                     </svg></span>
                 </button>
+                <label class="toggle-hidden" for="live-epg-toggle">
+                  <input type="checkbox" id="live-epg-toggle">
+                  <span>EPG View</span>
+                </label>
 
               </div>
             </div>
@@ -350,29 +346,27 @@
             </div>
           </section>
         </div>
-      </div>
-
-      <!-- Guide Page -->
-      <div id="page-guide" class="page">
-        <div class="guide-header">
-          <h2>TV Guide</h2>
-          <div class="guide-controls">
-            <select id="epg-group-select" class="source-select">
-              <option value="">All Groups</option>
-            </select>
-            <div class="search-wrapper">
-              <input type="text" id="epg-search" placeholder="Search channels..." class="search-input">
-              <button type="button" class="search-clear" title="Clear search">&times;</button>
+        <div id="live-epg-panel" class="live-epg-panel hidden">
+          <div class="guide-header">
+            <h2>TV Guide</h2>
+            <div class="guide-controls">
+              <select id="epg-group-select" class="source-select">
+                <option value="">All Groups</option>
+              </select>
+              <div class="search-wrapper">
+                <input type="text" id="epg-search" placeholder="Search channels..." class="search-input">
+                <button type="button" class="search-clear" title="Clear search">&times;</button>
+              </div>
+              <button id="guide-prev" class="btn btn-ghost">&larr; Earlier</button>
+              <span id="guide-date" class="guide-date">Today</span>
+              <button id="guide-next" class="btn btn-ghost">Later &rarr;</button>
             </div>
-            <button id="guide-prev" class="btn btn-ghost">&larr; Earlier</button>
-            <span id="guide-date" class="guide-date">Today</span>
-            <button id="guide-next" class="btn btn-ghost">Later &rarr;</button>
           </div>
-        </div>
-        <div id="epg-grid" class="epg-grid">
-          <div class="empty-state">
-            <p>No EPG data available</p>
-            <p class="hint">Add an EPG source in Settings</p>
+          <div id="epg-grid" class="epg-grid">
+            <div class="empty-state">
+              <p>No EPG data available</p>
+              <p class="hint">Add an EPG source in Settings</p>
+            </div>
           </div>
         </div>
       </div>
@@ -417,11 +411,15 @@
                 <h3 id="movie-details-title"></h3>
                 <div id="movie-details-meta" class="movie-details-meta"></div>
                 <p id="movie-details-plot"></p>
+                <p id="movie-details-cast" class="movie-details-cast hidden"></p>
                 <div class="movie-details-rating">
                   <span class="movie-rating-score" id="movie-details-rating-score"></span>
                   <span class="movie-rating-count" id="movie-details-rating-count"></span>
                 </div>
-                <button class="btn btn-primary" id="movie-details-play-btn">Play Movie</button>
+                <div class="movie-details-actions">
+                  <button class="btn btn-primary" id="movie-details-play-btn">Play Movie</button>
+                  <button class="btn btn-ghost hidden" id="movie-details-trailer-btn">Watch Trailer</button>
+                </div>
               </div>
             </div>
           </div>
@@ -470,9 +468,13 @@
                 <h3 id="series-title"></h3>
                 <div id="series-details-meta" class="series-details-meta"></div>
                 <p id="series-plot"></p>
+                <p id="series-cast" class="series-cast hidden"></p>
                 <div class="series-details-rating">
                   <span class="series-rating-score" id="series-details-rating-score"></span>
                   <span class="series-rating-count" id="series-details-rating-count"></span>
+                </div>
+                <div class="series-details-actions">
+                  <button class="btn btn-ghost hidden" id="series-details-trailer-btn">Watch Trailer</button>
                 </div>
               </div>
             </div>
@@ -566,6 +568,24 @@
                 </div>
                 <span class="account-badge" id="account-email-verified-badge">Unknown</span>
               </div>
+              <div class="setting-item account-status-item">
+                <div class="setting-info">
+                  <span class="setting-label">Discord</span>
+                  <span class="setting-hint" id="account-discord-status">Not linked</span>
+                </div>
+                <div class="account-actions-row">
+                  <button type="button" class="btn btn-secondary btn-sm" id="account-discord-action-btn">Link Discord</button>
+                </div>
+              </div>
+              <div class="account-discord-card hidden" id="account-discord-card">
+                <img src="" alt="Discord avatar" class="account-discord-avatar" id="account-discord-avatar">
+                <div class="account-discord-meta">
+                  <span class="account-discord-name" id="account-discord-name">Discord User</span>
+                  <span class="account-discord-handle" id="account-discord-handle">@username</span>
+                  <span class="account-discord-member-status" id="account-discord-member-status">Status unknown</span>
+                </div>
+              </div>
+              <span class="hint" id="account-discord-feedback"></span>
             </div>
 
             <div class="settings-section">
@@ -802,6 +822,16 @@
               <h3>Stream Processing</h3>
               <div class="setting-item">
                 <label class="setting-toggle">
+                  <input type="checkbox" id="setting-hags-enabled">
+                  <span class="toggle-slider"></span>
+                </label>
+                <div class="setting-info">
+                  <span class="setting-label">HAGS Optimization Hint</span>
+                  <span class="setting-hint">Enable this only if Hardware-Accelerated GPU Scheduling is already enabled in Windows. This does not change OS-level HAGS automatically.</span>
+                </div>
+              </div>
+              <div class="setting-item">
+                <label class="setting-toggle">
                   <input type="checkbox" id="setting-auto-transcode-tc">
                   <span class="toggle-slider"></span>
                 </label>
@@ -934,6 +964,63 @@
 
           <!-- Users Tab (Admin Only) -->
           <div id="tab-users" class="tab-content">
+            <div class="settings-section">
+              <h3>Discord Bot Monitor</h3>
+              <p class="hint">Monitor bot connectivity and configure runtime behavior.</p>
+
+              <div class="discord-bot-monitor-card">
+                <div class="discord-bot-monitor-grid">
+                  <div class="discord-bot-monitor-item">
+                    <span class="setting-label">Process Heartbeat</span>
+                    <span class="setting-hint" id="discord-bot-heartbeat-status">Unknown</span>
+                  </div>
+                  <div class="discord-bot-monitor-item">
+                    <span class="setting-label">Bot Identity</span>
+                    <span class="setting-hint" id="discord-bot-identity-status">Unknown</span>
+                  </div>
+                  <div class="discord-bot-monitor-item">
+                    <span class="setting-label">Guild Connection</span>
+                    <span class="setting-hint" id="discord-bot-guild-status">Unknown</span>
+                  </div>
+                  <div class="discord-bot-monitor-item">
+                    <span class="setting-label">Admin Role Lookup</span>
+                    <span class="setting-hint" id="discord-bot-role-status">Unknown</span>
+                  </div>
+                </div>
+                <div class="account-actions-row" style="margin-top: 8px;">
+                  <button class="btn btn-sm btn-secondary" id="discord-bot-refresh-btn">Refresh Status</button>
+                  <span class="hint" id="discord-bot-status-feedback"></span>
+                </div>
+              </div>
+
+              <div class="add-user-section">
+                <h4>Discord Bot Config</h4>
+                <form id="discord-bot-config-form" class="user-form">
+                  <div class="form-group">
+                    <label for="discord-bot-prefix">Command Prefix</label>
+                    <input type="text" id="discord-bot-prefix" class="form-input" maxlength="3" placeholder="!">
+                  </div>
+                  <div class="form-group">
+                    <label for="discord-bot-guild-id">Guild ID</label>
+                    <input type="text" id="discord-bot-guild-id" class="form-input" placeholder="Discord server ID">
+                  </div>
+                  <div class="form-group">
+                    <label for="discord-bot-admin-role-id">Admin Role ID</label>
+                    <input type="text" id="discord-bot-admin-role-id" class="form-input" placeholder="Discord admin role ID">
+                  </div>
+                  <div class="form-group">
+                    <label for="discord-bot-active-window-ms">Active Window (ms)</label>
+                    <input type="number" id="discord-bot-active-window-ms" class="form-input" min="10000" step="1000">
+                  </div>
+                  <div class="form-group">
+                    <label for="discord-bot-dedupe-window-ms">Dedupe Window (ms)</label>
+                    <input type="number" id="discord-bot-dedupe-window-ms" class="form-input" min="1000" step="1000">
+                  </div>
+                  <button type="submit" class="btn btn-primary">Save Bot Config</button>
+                </form>
+              </div>
+            </div>
+
             <div class="settings-section">
               <h3>User Management</h3>
               <p class="hint">Manage user accounts and permissions</p>
@@ -1280,6 +1367,8 @@
   </div>
 
   <!-- JavaScript -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
   <script src="/js/icons.js"></script>
   <script src="/js/api.js?v=3"></script>
   <script src="/js/utils/galaxyBackground.js?v=2"></script>
@@ -1289,14 +1378,13 @@
   <script src="/js/components/SourceManager.js?v=2"></script>
   <script src="/js/components/EpgGuide.js?v=2"></script>
   <script src="/js/pages/HomePage.js?v=2"></script>
-  <script src="/js/pages/LivePage.js?v=2"></script>
-  <script src="/js/pages/Guide.js?v=2"></script>
+  <script src="/js/pages/LivePage.js?v=3"></script>
   <script src="/js/pages/MoviesPage.js?v=5"></script>
   <script src="/js/pages/SeriesPage.js?v=2"></script>
   <script src="/js/pages/Settings.js?v=3"></script>
   <script src="/js/pages/SearchPage.js?v=1"></script>
-  <script src="/js/pages/WatchPage.js?v=1"></script>
-  <script src="/js/app.js?v=4"></script>
+  <script src="/js/pages/WatchPage.js?v=2"></script>
+  <script src="/js/app.js?v=5"></script>
   <script>
     // Check for SSO token in URL
     (async function () {

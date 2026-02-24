@@ -122,6 +122,10 @@ class WatchPage {
         this.sessionRestartInFlight = false;
         this.lastSessionRestartAt = 0;
         this.hlsLoadToken = 0;
+        this.historySaveInterval = null;
+        this.lastHistorySavedProgress = 0;
+        this.lastHistorySavedAt = 0;
+        this.probeRefreshInFlight = false;
 
         this.init();
     }
@@ -520,12 +524,13 @@ class WatchPage {
         return {};
     }
 
-    async fetchProbeWithTimeout(url, ua = '', timeoutMs = 2500) {
+    async fetchProbeWithTimeout(url, ua = '', timeoutMs = 2500, options = {}) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const fresh = options?.forceRefresh ? '&fresh=1' : '';
 
         try {
-            const res = await fetch(`/api/probe?url=${encodeURIComponent(url)}&ua=${encodeURIComponent(ua || '')}`, {
+            const res = await fetch(`/api/probe?url=${encodeURIComponent(url)}&ua=${encodeURIComponent(ua || '')}${fresh}`, {
                 signal: controller.signal
             });
             if (!res.ok) return null;
@@ -541,19 +546,43 @@ class WatchPage {
         }
     }
 
-    async getProbeInfo(url, settings, timeoutMs = 2500) {
+    async getProbeInfo(url, settings, timeoutMs = 2500, options = {}) {
         const ua = settings.userAgentPreset === 'custom' ? settings.userAgentCustom : settings.userAgentPreset;
         const cacheKey = `${url}|${ua || ''}`;
+        const shouldForceRefresh = !!options?.forceRefresh;
         const cached = this.probeCache.get(cacheKey);
-        if (cached && (Date.now() - cached.at < 10 * 60 * 1000)) {
+        if (!shouldForceRefresh && cached && (Date.now() - cached.at < 10 * 60 * 1000)) {
             return cached.data;
         }
 
-        const info = await this.fetchProbeWithTimeout(url, ua || '', timeoutMs);
+        const info = await this.fetchProbeWithTimeout(url, ua || '', timeoutMs, { forceRefresh: shouldForceRefresh });
         if (info) {
             this.probeCache.set(cacheKey, { data: info, at: Date.now() });
         }
         return info;
+    }
+
+    async refreshPlaybackMetadataFromProbe() {
+        if (this.probeRefreshInFlight) return;
+        if (!this.currentUrl || !this.canSaveHistory()) return;
+
+        this.probeRefreshInFlight = true;
+        try {
+            const settings = this.getCachedSettings();
+            const info = await this.getProbeInfo(this.currentUrl, settings, 4000, { forceRefresh: true });
+            if (!info) return;
+
+            this.currentStreamInfo = {
+                ...this.currentStreamInfo,
+                ...info
+            };
+            this.applyProbeDuration(info);
+            this.updateQualityBadge();
+        } catch (err) {
+            console.warn('[WatchPage] Periodic probe refresh failed:', err?.message || err);
+        } finally {
+            this.probeRefreshInFlight = false;
+        }
     }
 
     applyProbeDuration(info) {
@@ -853,6 +882,8 @@ class WatchPage {
 
     stop() {
         this.stopPlaybackHealthMonitor();
+        this.stopHistorySaveLoop();
+        this.saveWatchProgress('stop', { force: true }).catch(() => {});
 
         // Cleanup transcode session if exists
         this.stopTranscodeSession();
@@ -1136,6 +1167,9 @@ class WatchPage {
         if (!this.isScrubbing) {
             this.seekPreviewEl?.classList.add('hidden');
         }
+
+        this.startHistorySaveLoop();
+        this.saveWatchProgress('play', { force: true }).catch(() => {});
     }
 
     onPause() {
@@ -1146,9 +1180,15 @@ class WatchPage {
         // Keep overlay visible when paused
         this.showOverlay();
         clearTimeout(this.overlayTimeout);
+
+        this.stopHistorySaveLoop();
+        this.saveWatchProgress('pause', { force: true }).catch(() => {});
     }
 
     onEnded() {
+        this.stopHistorySaveLoop();
+        this.saveWatchProgress('ended', { force: true, completed: true }).catch(() => {});
+
         // For series, show next episode panel if not already showing and auto-play is enabled
         const autoPlayEnabled = this.app?.player?.settings?.autoPlayNextEpisode;
         if (autoPlayEnabled && this.contentType === 'series' && this.seriesInfo && !this.nextEpisodeShowing) {
@@ -1178,6 +1218,96 @@ class WatchPage {
         const error = this.video?.error;
         if (error && error.code) {
             console.error('[WatchPage] Video error:', error.code, error.message);
+        }
+    }
+
+    canSaveHistory() {
+        const hasContent = !!this.content;
+        const sourceId = Number(this.content?.sourceId);
+        const itemId = this.content?.id;
+        if (!hasContent || !itemId) return false;
+        if (!Number.isFinite(sourceId) || sourceId <= 0) return false;
+        return this.contentType === 'movie' || this.contentType === 'series';
+    }
+
+    getHistoryDurationSeconds() {
+        const seekable = Number(this.getSeekableDuration() || 0);
+        if (Number.isFinite(seekable) && seekable > 0) return Math.floor(seekable);
+        const known = Number(this.knownDurationSeconds || 0);
+        if (Number.isFinite(known) && known > 0) return Math.floor(known);
+        return 0;
+    }
+
+    getHistoryPayload(reason = 'tick', completed = false) {
+        const progress = Math.max(0, Math.floor(Number(this.getAbsoluteCurrentTime() || 0)));
+        const duration = this.getHistoryDurationSeconds();
+        const type = this.contentType === 'movie' ? 'movie' : 'episode';
+
+        return {
+            id: String(this.content.id),
+            type,
+            parentId: type === 'episode' ? (this.content.seriesId ? String(this.content.seriesId) : null) : null,
+            progress,
+            duration,
+            sourceId: Number(this.content.sourceId),
+            completed: !!completed,
+            data: {
+                reason: String(reason || 'tick'),
+                title: this.content.title || '',
+                subtitle: this.content.subtitle || '',
+                description: this.content.description || '',
+                poster: this.content.poster || '',
+                year: this.content.year || '',
+                rating: this.content.rating || '',
+                sourceId: Number(this.content.sourceId),
+                containerExtension: this.containerExtension || 'mp4',
+                streamVideoCodec: this.currentStreamInfo?.video || '',
+                streamAudioCodec: this.currentStreamInfo?.audio || '',
+                streamContainer: this.currentStreamInfo?.container || '',
+                streamWidth: Number(this.currentStreamInfo?.width || 0),
+                streamHeight: Number(this.currentStreamInfo?.height || 0),
+                seriesId: this.content.seriesId || null,
+                currentSeason: this.content.currentSeason || null,
+                currentEpisode: this.content.currentEpisode || null,
+                duration
+            }
+        };
+    }
+
+    async saveWatchProgress(reason = 'tick', options = {}) {
+        const { force = false, completed = false } = options;
+        if (!this.canSaveHistory()) return;
+
+        const payload = this.getHistoryPayload(reason, completed);
+        const allowZeroDurationStartLog = payload?.type === 'movie' && reason === 'play';
+        if (!payload.duration && !completed && !allowZeroDurationStartLog) return;
+
+        const now = Date.now();
+        const progressDelta = Math.abs(payload.progress - this.lastHistorySavedProgress);
+        const shouldSkip = !force && !completed && progressDelta < 5 && (now - this.lastHistorySavedAt) < 10000;
+        if (shouldSkip) return;
+
+        try {
+            await window.API.request('POST', '/history', payload);
+            this.lastHistorySavedProgress = payload.progress;
+            this.lastHistorySavedAt = now;
+        } catch (err) {
+            console.warn(`[WatchPage] Failed to save watch progress (${reason}):`, err?.message || err);
+        }
+    }
+
+    startHistorySaveLoop() {
+        this.stopHistorySaveLoop();
+        this.historySaveInterval = setInterval(async () => {
+            await this.refreshPlaybackMetadataFromProbe();
+            this.saveWatchProgress('interval', { force: true }).catch(() => {});
+        }, 10000);
+    }
+
+    stopHistorySaveLoop() {
+        if (this.historySaveInterval) {
+            clearInterval(this.historySaveInterval);
+            this.historySaveInterval = null;
         }
     }
 

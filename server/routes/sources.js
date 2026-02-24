@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
         // Don't expose passwords in list view
         const sanitized = allSources.map(s => ({
             ...s,
-            password: s.password ? '••••••••' : null
+            password: s.password ? '********' : null
         }));
         res.json(sanitized);
     } catch (err) {

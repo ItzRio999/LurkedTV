@@ -150,13 +150,14 @@ function analyzeProbeResult(probeResult, url) {
 }
 
 router.get('/', async (req, res) => {
-    const { url, ua } = req.query;
+    const { url, ua, fresh } = req.query;
     if (!url) {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
 
     const ffprobePath = req.app.locals.ffprobePath;
     const cacheKey = `${url}${ua ? `|${ua}` : ''}`;
+    const forceFresh = fresh === '1' || fresh === 'true';
 
     if (!ffprobePath) {
         // No ffprobe available - assume needs transcoding to be safe
@@ -173,7 +174,7 @@ router.get('/', async (req, res) => {
 
     // Check cache
     const cached = probeCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+    if (!forceFresh && cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
         console.log(`[Probe] Cache hit for: ${url.substring(0, 50)}...`);
         return res.json(cached.result);
     }

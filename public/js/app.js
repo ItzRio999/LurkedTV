@@ -1,5 +1,5 @@
 /**
- * LurkedTv Application Entry Point
+ * LurkedTV Application Entry Point
  */
 
 class App {
@@ -18,7 +18,6 @@ class App {
         // Initialize page controllers
         this.pages.home = new HomePage(this);
         this.pages.live = new LivePage(this);
-        this.pages.guide = new GuidePage(this);
         this.pages.movies = new MoviesPage(this);
         this.pages.series = new SeriesPage(this);
         this.pages.search = new SearchPage(this);
@@ -155,10 +154,15 @@ class App {
 
         // Navigate to the page from URL hash, or default to home
         const hash = window.location.hash.slice(1); // Remove #
-        const initialPage = hash && this.pages[hash] ? hash : 'home';
+        const initialPage = hash === 'guide' ? 'live' : (hash && this.pages[hash] ? hash : 'home');
         this.navigateTo(initialPage, true); // true = replace history (don't add)
+        if (hash === 'guide') {
+            this.pages.live?.setEpgMode?.(true);
+            const liveToggle = document.getElementById('live-epg-toggle');
+            if (liveToggle) liveToggle.checked = true;
+        }
 
-        console.log('LurkedTv initialized');
+        console.log('LurkedTV initialized');
     }
 
     detectDeviceCapabilities() {
@@ -454,8 +458,22 @@ class App {
     }
 
     navigateTo(pageName, replaceHistory = false) {
+        const requestedGuide = pageName === 'guide';
+        if (requestedGuide) {
+            pageName = 'live';
+        }
+
+        if (!this.pages[pageName]) {
+            pageName = 'home';
+        }
+
         // Don't navigate if already on this page
         if (this.currentPage === pageName && !replaceHistory) {
+            if (requestedGuide) {
+                const liveToggle = document.getElementById('live-epg-toggle');
+                if (liveToggle) liveToggle.checked = true;
+                this.pages.live?.setEpgMode?.(true);
+            }
             return;
         }
 
@@ -488,6 +506,12 @@ class App {
         if (this.pages[pageName]?.show) {
             this.pages[pageName].show();
         }
+
+        if (requestedGuide) {
+            const liveToggle = document.getElementById('live-epg-toggle');
+            if (liveToggle) liveToggle.checked = true;
+            this.pages.live?.setEpgMode?.(true);
+        }
     }
 }
 
@@ -500,7 +524,10 @@ document.addEventListener('DOMContentLoaded', () => {
         .then(res => res.json())
         .then(data => {
             const badge = document.getElementById('version-badge');
-            if (badge && data.version) badge.textContent = `v${data.version}`;
+            if (badge && data.version) {
+                const major = Number.parseInt(`${data.version}`.split('.')[0], 10);
+                badge.textContent = Number.isFinite(major) && major > 0 ? `V${major}` : `V${data.version}`;
+            }
         })
         .catch(() => { });
 });

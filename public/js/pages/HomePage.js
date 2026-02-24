@@ -18,7 +18,10 @@ class HomePage {
     async show() {
         this.renderLayout();
         this.initWelcomeClock();
-        await this.loadDashboardData();
+        await Promise.allSettled([
+            this.loadWelcomeSourceMeta(),
+            this.loadDashboardData()
+        ]);
     }
 
     hide() {
@@ -37,9 +40,23 @@ class HomePage {
             <div class="dashboard-content" id="home-content">
                 <section class="dashboard-welcome" id="dashboard-welcome">
                     <div class="dashboard-welcome-copy">
-                        <p class="dashboard-welcome-kicker">Welcome back</p>
-                        <h1 class="dashboard-welcome-title" id="home-welcome-message">Welcome to LurkedTv</h1>
+                        <p class="dashboard-welcome-kicker">Welcome back <span class="dashboard-version-tag">V5</span></p>
+                        <h1 class="dashboard-welcome-title" id="home-welcome-message">Welcome to LurkedTV</h1>
                         <p class="dashboard-welcome-subtitle">Your stream lineup is ready.</p>
+                        <div class="dashboard-welcome-meta" id="dashboard-welcome-meta">
+                            <div class="dashboard-meta-item">
+                                <span class="dashboard-meta-label">Playlist</span>
+                                <span class="dashboard-meta-value" id="home-meta-playlist">Loading...</span>
+                            </div>
+                            <div class="dashboard-meta-item">
+                                <span class="dashboard-meta-label">Expiry</span>
+                                <span class="dashboard-meta-value" id="home-meta-expiry">Loading...</span>
+                            </div>
+                            <div class="dashboard-meta-item">
+                                <span class="dashboard-meta-label">EPG Updated</span>
+                                <span class="dashboard-meta-value" id="home-meta-epg-sync">Loading...</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="dashboard-clock" aria-live="polite">
                         <div class="dashboard-clock-time" id="home-clock-time">--:--:--</div>
@@ -171,7 +188,7 @@ class HomePage {
 
         if (messageEl) {
             const username = this.app?.currentUser?.username;
-            messageEl.textContent = username ? `Welcome back, ${username}` : 'Welcome to LurkedTv';
+            messageEl.textContent = username ? `Welcome back, ${username}` : 'Welcome to LurkedTV';
         }
 
         if (toggleEl) {
@@ -220,6 +237,135 @@ class HomePage {
 
         timeEl.textContent = timeFormatter.format(now);
         dateEl.textContent = dateFormatter.format(now);
+    }
+
+    getHomePrimarySource(sources) {
+        const selectedValue = this.app?.channelList?.sourceSelect?.value || '';
+        if (selectedValue.includes(':')) {
+            const [selectedType, selectedId] = selectedValue.split(':');
+            const selectedSource = sources.find(source =>
+                String(source.id) === String(selectedId) && source.type === selectedType
+            );
+            if (selectedSource) return selectedSource;
+        }
+
+        return sources.find(source => source.type === 'xtream') || sources[0] || null;
+    }
+
+    formatDashboardDateTime(timestampMs) {
+        const ts = Number(timestampMs);
+        if (!Number.isFinite(ts) || ts <= 0) return 'Unknown';
+        const date = new Date(ts);
+        if (Number.isNaN(date.getTime())) return 'Unknown';
+
+        return new Intl.DateTimeFormat(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        }).format(date);
+    }
+
+    formatXtreamExpiry(expDateSecondsRaw) {
+        const expDateSeconds = Number(expDateSecondsRaw);
+        if (!Number.isFinite(expDateSeconds) || expDateSeconds <= 0) {
+            return 'No expiry data';
+        }
+
+        const expiryMs = expDateSeconds * 1000;
+        const expiryText = this.formatDashboardDateTime(expiryMs);
+        const now = Date.now();
+
+        if (expiryMs <= now) {
+            return `Expired (${expiryText})`;
+        }
+
+        const daysLeft = Math.ceil((expiryMs - now) / (24 * 60 * 60 * 1000));
+        if (daysLeft <= 1) {
+            return `${expiryText} (today)`;
+        }
+
+        return `${expiryText} (${daysLeft}d left)`;
+    }
+
+    getLastEpgSyncTimestamp(primarySource, allSources, statuses) {
+        const statusRows = Array.isArray(statuses) ? statuses : [];
+        const sourceStatuses = statusRows.filter(status =>
+            String(status.source_id) === String(primarySource.id)
+        );
+        const sourceLastSync = sourceStatuses
+            .map(status => Number(status.last_sync))
+            .filter(Number.isFinite)
+            .sort((a, b) => b - a)[0] || null;
+
+        if (primarySource.type === 'xtream' && sourceLastSync) {
+            return sourceLastSync;
+        }
+
+        const epgSourceIds = new Set(
+            (allSources || [])
+                .filter(source => source.enabled && source.type === 'epg')
+                .map(source => String(source.id))
+        );
+
+        const epgLastSync = statusRows
+            .filter(status => epgSourceIds.has(String(status.source_id)))
+            .map(status => Number(status.last_sync))
+            .filter(Number.isFinite)
+            .sort((a, b) => b - a)[0] || null;
+
+        return sourceLastSync || epgLastSync || null;
+    }
+
+    async loadWelcomeSourceMeta() {
+        const playlistEl = document.getElementById('home-meta-playlist');
+        const expiryEl = document.getElementById('home-meta-expiry');
+        const epgSyncEl = document.getElementById('home-meta-epg-sync');
+        if (!playlistEl || !expiryEl || !epgSyncEl) return;
+
+        try {
+            const [allSources, statuses] = await Promise.all([
+                window.API.sources.getAll(),
+                window.API.sources.getStatus().catch(() => [])
+            ]);
+
+            const enabledPlaylists = (allSources || []).filter(source =>
+                source.enabled && (source.type === 'xtream' || source.type === 'm3u')
+            );
+
+            if (!enabledPlaylists.length) {
+                playlistEl.textContent = 'No active playlist';
+                expiryEl.textContent = 'N/A';
+                epgSyncEl.textContent = 'Not synced yet';
+                return;
+            }
+
+            const primarySource = this.getHomePrimarySource(enabledPlaylists);
+            playlistEl.textContent = primarySource?.name || 'Unknown playlist';
+
+            if (primarySource?.type === 'xtream') {
+                try {
+                    const authData = await window.API.proxy.xtream.auth(primarySource.id);
+                    expiryEl.textContent = this.formatXtreamExpiry(authData?.user_info?.exp_date);
+                } catch (err) {
+                    console.warn('[Dashboard] Could not fetch Xtream expiry data:', err);
+                    expiryEl.textContent = 'Unavailable';
+                }
+            } else {
+                expiryEl.textContent = 'N/A (M3U)';
+            }
+
+            const epgSyncTimestamp = this.getLastEpgSyncTimestamp(primarySource, allSources, statuses);
+            epgSyncEl.textContent = epgSyncTimestamp
+                ? this.formatDashboardDateTime(epgSyncTimestamp)
+                : 'Not synced yet';
+        } catch (err) {
+            console.error('[Dashboard] Error loading welcome source metadata:', err);
+            playlistEl.textContent = 'Unavailable';
+            expiryEl.textContent = 'Unavailable';
+            epgSyncEl.textContent = 'Unavailable';
+        }
     }
 
     initScrollArrows() {

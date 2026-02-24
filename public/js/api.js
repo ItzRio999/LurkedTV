@@ -1,5 +1,5 @@
 /**
- * API Client - Frontend API wrapper for LurkedTv
+ * API Client - Frontend API wrapper for LurkedTV
  */
 
 const API = {
@@ -162,7 +162,9 @@ const API = {
         getDefaults: () => API.request('GET', '/settings/defaults'),
         getSyncStatus: () => API.request('GET', '/settings/sync-status'),
         syncFirebaseCache: () => API.request('POST', '/settings/firebase-cache/sync'),
-        applyAutoProfile: (data = {}) => API.request('POST', '/settings/auto-profile/apply', data)
+        applyAutoProfile: (data = {}) => API.request('POST', '/settings/auto-profile/apply', data),
+        getDiscordBotStatus: () => API.request('GET', '/settings/discord-bot/status'),
+        updateDiscordBotConfig: (data) => API.request('PUT', '/settings/discord-bot/config', data)
     },
 
     // Users (admin only)
@@ -177,7 +179,10 @@ const API = {
     account: {
         getMe: () => API.request('GET', '/auth/me'),
         updatePreferences: (data) => API.request('PATCH', '/auth/me/preferences', data),
-        changePassword: (data) => API.request('POST', '/auth/me/change-password', data)
+        changePassword: (data) => API.request('POST', '/auth/me/change-password', data),
+        startDiscordLink: () => API.request('POST', '/auth/discord/link/start'),
+        unlinkDiscord: () => API.request('DELETE', '/auth/discord/link'),
+        getDiscordAdminStatus: () => API.request('GET', '/auth/discord/admin-status')
     }
 };
 

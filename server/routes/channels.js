@@ -323,10 +323,19 @@ router.get('/recent', async (req, res) => {
         `).all(type, parseInt(limit));
 
         // Parse JSON data for each item
-        const formatted = recentItems.map(item => ({
-            ...item,
-            data: JSON.parse(item.data)
-        }));
+        const formatted = recentItems.map(item => {
+            let parsedData = null;
+            try {
+                parsedData = item.data ? JSON.parse(item.data) : null;
+            } catch (e) {
+                parsedData = null;
+            }
+
+            return {
+                ...item,
+                data: parsedData
+            };
+        });
 
         res.json(formatted);
     } catch (err) {

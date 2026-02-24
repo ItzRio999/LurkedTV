@@ -73,6 +73,7 @@ class TranscodeSession extends EventEmitter {
             userAgent: options.userAgent || 'Mozilla/5.0',
             seekOffset: options.seekOffset || 0,
             hwEncoder: options.hwEncoder || 'software',
+            hagsEnabled: options.hagsEnabled === true,
             maxResolution: options.maxResolution || '1080p',
             quality: options.quality || 'medium',
             // Upscaling options
@@ -178,6 +179,7 @@ class TranscodeSession extends EventEmitter {
      */
     buildFFmpegArgs() {
         const videoMode = this.options.videoMode || 'encode';
+        const hagsEnabled = this.options.hagsEnabled === true;
 
         // Resolve 'auto' encoder to detected hardware, fallback to software
         let encoder = this.options.hwEncoder || 'software';
@@ -186,7 +188,7 @@ class TranscodeSession extends EventEmitter {
             encoder = hwCaps?.recommended || 'software';
             console.log(`[TranscodeSession ${this.id}] Auto encoder resolved to: ${encoder}`);
         }
-        const threadPlan = this.getThreadPlan(encoder);
+        const threadPlan = this.getThreadPlan(encoder, hagsEnabled);
 
         const args = [
             '-hide_banner',
@@ -203,11 +205,14 @@ class TranscodeSession extends EventEmitter {
         }
 
         // Input options (common)
+        const inputFflags = hagsEnabled ? '+genpts+discardcorrupt+nobuffer' : '+genpts+discardcorrupt';
         args.push(
             '-probesize', '2000000',
             '-analyzeduration', '2000000',
-            '-fflags', '+genpts+discardcorrupt',
+            '-fflags', inputFflags,
             '-err_detect', 'ignore_err',
+            ...(hagsEnabled ? ['-flags', 'low_delay'] : []),
+            '-max_delay', hagsEnabled ? '0' : '2000000',
             '-reconnect', '1',
             '-reconnect_streamed', '1',
             '-reconnect_delay_max', '3'
@@ -238,7 +243,7 @@ class TranscodeSession extends EventEmitter {
                 args.push('-bsf:v', 'dump_extra');
             }
         } else {
-            this.addVideoEncoderArgs(args, encoder, threadPlan);
+            this.addVideoEncoderArgs(args, encoder, threadPlan, hagsEnabled);
         }
 
         // Audio: Apply mix preset
@@ -297,7 +302,7 @@ class TranscodeSession extends EventEmitter {
      * CPU/GPU hybrid thread planning for FFmpeg.
      * Keeps CPU involved for decode/demux/audio/filter stages even with GPU video encode.
      */
-    getThreadPlan(encoder) {
+    getThreadPlan(encoder, hagsEnabled = false) {
         const hwCaps = hwDetect.getCapabilities();
         const logicalThreads = hwCaps?.cpu?.logicalThreads || 4;
         const recommended = hwCaps?.cpu?.recommendedThreads || Math.max(2, Math.floor(logicalThreads * 0.75));
@@ -312,7 +317,8 @@ class TranscodeSession extends EventEmitter {
         }
 
         // GPU encode path: keep enough CPU for demux/audio while avoiding oversubscription.
-        const ffmpegThreads = Math.max(2, Math.min(16, Math.floor(recommended * 0.7)));
+        const gpuThreadBudget = hagsEnabled ? 0.55 : 0.7;
+        const ffmpegThreads = Math.max(2, Math.min(16, Math.floor(recommended * gpuThreadBudget)));
         return {
             ffmpegThreads,
             filterThreads: Math.max(2, Math.min(8, Math.floor(ffmpegThreads / 2))),
@@ -362,7 +368,7 @@ class TranscodeSession extends EventEmitter {
     /**
      * Add video encoder arguments based on selected encoder
      */
-    addVideoEncoderArgs(args, encoder, threadPlan = {}) {
+    addVideoEncoderArgs(args, encoder, threadPlan = {}, hagsEnabled = false) {
         const resolution = this.getTargetHeight();
         const quality = this.options.quality || 'medium';
 
@@ -376,16 +382,16 @@ class TranscodeSession extends EventEmitter {
 
         switch (encoder) {
             case 'nvenc':
-                this.addNvencEncoderArgs(args, resolution, qp.nvenc);
+                this.addNvencEncoderArgs(args, resolution, qp.nvenc, hagsEnabled);
                 break;
             case 'amf':
                 this.addAmfEncoderArgs(args, resolution, qp.amf);
                 break;
             case 'vaapi':
-                this.addVaapiEncoderArgs(args, resolution, qp.vaapi);
+                this.addVaapiEncoderArgs(args, resolution, qp.vaapi, hagsEnabled);
                 break;
             case 'qsv':
-                this.addQsvEncoderArgs(args, resolution, qp.qsv);
+                this.addQsvEncoderArgs(args, resolution, qp.qsv, hagsEnabled);
                 break;
             case 'software':
             case 'auto':
@@ -460,19 +466,24 @@ class TranscodeSession extends EventEmitter {
     /**
      * NVIDIA NVENC encoder arguments
      */
-    addNvencEncoderArgs(args, height, qp) {
+    addNvencEncoderArgs(args, height, qp, hagsEnabled = false) {
         // Video filter for scaling on GPU
         args.push('-vf', this.buildScaleFilter('nvenc', height));
 
         // NVENC encoder with quality settings
         // Using portable options that work across FFmpeg builds
+        const preset = hagsEnabled ? 'p3' : 'p4';
+        const bFrames = hagsEnabled ? '0' : '3';
         args.push(
             '-c:v', 'h264_nvenc',
-            '-preset', 'p4',           // Balanced preset (p1=fastest, p7=best)
+            '-preset', preset,         // Balanced/low-latency preset (p1=fastest, p7=best)
             '-rc', 'constqp',          // Constant QP mode
             '-qp', String(qp),
-            '-bf', '3'                 // B-frames for better compression
+            '-bf', bFrames             // Reduce B-frames in low-latency mode
         );
+        if (hagsEnabled) {
+            args.push('-tune', 'll');
+        }
     }
 
     /**
@@ -496,7 +507,7 @@ class TranscodeSession extends EventEmitter {
     /**
      * VAAPI encoder arguments (Linux)
      */
-    addVaapiEncoderArgs(args, height, qp) {
+    addVaapiEncoderArgs(args, height, qp, hagsEnabled = false) {
         // VAAPI filter chain:
         // 1. scale_vaapi to resize on GPU
         // 2. Ensure output format is nv12 for maximum encoder compatibility
@@ -509,7 +520,7 @@ class TranscodeSession extends EventEmitter {
             '-c:v', 'h264_vaapi',
             '-profile:v', 'main',      // Use main profile for compatibility
             '-global_quality', String(qp),
-            '-bf', '3',
+            '-bf', hagsEnabled ? '0' : '3',
             '-pix_fmt', 'yuv420p'      // Force 8-bit output for compatibility
         );
     }
@@ -517,7 +528,7 @@ class TranscodeSession extends EventEmitter {
     /**
      * Intel QuickSync encoder arguments
      */
-    addQsvEncoderArgs(args, height, qp) {
+    addQsvEncoderArgs(args, height, qp, hagsEnabled = false) {
         // Scale on QSV
         args.push('-vf', this.buildScaleFilter('qsv', height));
 
@@ -525,10 +536,12 @@ class TranscodeSession extends EventEmitter {
             '-c:v', 'h264_qsv',
             '-preset', 'medium',
             '-global_quality', String(qp),
-            '-look_ahead', '1',
-            '-look_ahead_depth', '40',
+            '-look_ahead', hagsEnabled ? '0' : '1',
             '-pix_fmt', 'yuv420p'      // Force 8-bit output for compatibility
         );
+        if (!hagsEnabled) {
+            args.push('-look_ahead_depth', '40');
+        }
     }
 
     /**

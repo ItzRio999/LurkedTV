@@ -15,6 +15,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'nodecast-tv-secret-key-change-in-p
 const JWT_EXPIRY = '24h';
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyCnw2SySq8zl2PHjneE7_zEuosYueOo5Pk';
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'lurkedtv-b8047';
+let oidcEnabled = false;
 
 async function firebaseRequest(path, payload) {
     const response = await fetch(`https://identitytoolkit.googleapis.com/v1/${path}?key=${FIREBASE_API_KEY}`, {
@@ -205,6 +206,7 @@ function configureSessionSerialization(getUserById) {
 function configureOidcStrategy(findUserByOidcId, findUserByEmail, createUser) {
     if (!process.env.OIDC_ISSUER_URL || !process.env.OIDC_CLIENT_ID || !process.env.OIDC_CLIENT_SECRET) {
         console.warn('OIDC configuration missing - SSO disabled');
+        oidcEnabled = false;
         return;
     }
 
@@ -293,6 +295,11 @@ function configureOidcStrategy(findUserByOidcId, findUserByEmail, createUser) {
                 return done(err);
             }
         }));
+    oidcEnabled = true;
+}
+
+function isOidcEnabled() {
+    return oidcEnabled;
 }
 
 /**
@@ -335,6 +342,7 @@ module.exports = {
     configureJwtStrategy,
     configureSessionSerialization,
     configureOidcStrategy,
+    isOidcEnabled,
     requireAuth,
     requireAdmin,
     requireRole

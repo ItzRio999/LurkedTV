@@ -16,9 +16,11 @@ class MoviesPage {
         this.detailsTitle = document.getElementById('movie-details-title');
         this.detailsMeta = document.getElementById('movie-details-meta');
         this.detailsPlot = document.getElementById('movie-details-plot');
+        this.detailsCast = document.getElementById('movie-details-cast');
         this.detailsRatingScore = document.getElementById('movie-details-rating-score');
         this.detailsRatingCount = document.getElementById('movie-details-rating-count');
         this.detailsPlayBtn = document.getElementById('movie-details-play-btn');
+        this.detailsTrailerBtn = document.getElementById('movie-details-trailer-btn');
 
         this.movies = [];
         this.categories = [];
@@ -31,6 +33,8 @@ class MoviesPage {
         this.showFavoritesOnly = false;
         this.categoryNameMap = new Map();
         this.currentMovie = null;
+        this.currentMovieDetails = null;
+        this.movieDetailsCache = new Map();
         this.scrollRaf = null;
         this.resizeTimer = null;
         this.virtualTopSpacer = null;
@@ -41,6 +45,7 @@ class MoviesPage {
         this.virtualRowHeight = 300;
         this.virtualGap = 16;
         this.virtualOverscanRows = 4;
+        this.detailsBackdropLoadId = 0;
         this.onGridScroll = () => this.scheduleVirtualRender(false);
         this.onGridResize = () => {
             clearTimeout(this.resizeTimer);
@@ -89,6 +94,12 @@ class MoviesPage {
         this.detailsPlayBtn?.addEventListener('click', () => {
             if (this.currentMovie) this.playMovie(this.currentMovie);
         });
+        this.detailsTrailerBtn?.addEventListener('click', () => {
+            const url = this.getMovieTrailerUrl(this.currentMovieDetails, this.currentMovie);
+            if (url) {
+                window.open(url, '_blank', 'noopener,noreferrer');
+            }
+        });
     }
 
     async show() {
@@ -134,6 +145,177 @@ class MoviesPage {
         if (value === null || value === undefined) return fallback;
         const parsed = Number.parseFloat(`${value}`.replace(/[^0-9.\-]/g, ''));
         return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    collectImageUrls(value, bucket = []) {
+        if (value === null || value === undefined) return bucket;
+
+        if (Array.isArray(value)) {
+            value.forEach(entry => this.collectImageUrls(entry, bucket));
+            return bucket;
+        }
+
+        if (typeof value === 'object') {
+            const keys = ['url', 'src', 'image', 'poster', 'backdrop', 'cover', 'big_cover', 'cover_big', 'movie_image', 'thumb', 'original'];
+            keys.forEach(key => this.collectImageUrls(value?.[key], bucket));
+            return bucket;
+        }
+
+        const raw = `${value}`.trim();
+        if (!raw) return bucket;
+        const lowered = raw.toLowerCase();
+        if (lowered === 'null' || lowered === 'undefined' || lowered === 'n/a' || lowered === '[]' || lowered === '{}') {
+            return bucket;
+        }
+
+        if (raw.startsWith('[') || raw.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(raw);
+                this.collectImageUrls(parsed, bucket);
+                if (bucket.length > 0) return bucket;
+            } catch (_) {
+                // Fallback to string parsing below.
+            }
+        }
+
+        const normalized = raw.replace(/\\\//g, '/').replace(/[\r\n\t]/g, '').trim();
+        if (!normalized) return bucket;
+
+        const matches = normalized.match(/https?:\/\/[^"'\\\],\s]+/gi);
+        if (matches && matches.length > 1) {
+            matches.forEach(url => bucket.push(url.trim()));
+            return bucket;
+        }
+
+        const clean = normalized.replace(/^["']+|["']+$/g, '').trim();
+        if (!clean) return bucket;
+
+        if (!/^data:image\//i.test(clean) && clean.includes(',')) {
+            clean.split(',').map(part => part.trim()).filter(Boolean).forEach(part => bucket.push(part));
+            return bucket;
+        }
+
+        bucket.push(clean);
+        return bucket;
+    }
+
+    isLikelyImageUrl(url) {
+        const value = `${url || ''}`.trim();
+        if (!value) return false;
+        const lowered = value.toLowerCase();
+        if (lowered === 'null' || lowered === 'undefined' || lowered === 'n/a') return false;
+        return (
+            value.startsWith('http://') ||
+            value.startsWith('https://') ||
+            value.startsWith('//') ||
+            value.startsWith('/') ||
+            value.startsWith('img/') ||
+            /^data:image\//i.test(value) ||
+            /\.(avif|gif|jpe?g|png|webp)(\?|$)/i.test(value)
+        );
+    }
+
+    getFirstImageUrl(...values) {
+        const raw = [];
+        values.forEach(value => this.collectImageUrls(value, raw));
+        const unique = [...new Set(raw.map(url => `${url}`.trim()).filter(Boolean))];
+        return unique.find(url => this.isLikelyImageUrl(url)) || '';
+    }
+
+    getMovieBackdropUrl(movie) {
+        const info = movie?.info || {};
+        const movieData = movie?.movie_data || {};
+        const data = movie?.data || {};
+        return this.getFirstImageUrl(
+            movie?.backdrop_path,
+            info?.backdrop_path,
+            movieData?.backdrop_path,
+            data?.backdrop_path,
+            movie?.backdrop,
+            info?.backdrop,
+            info?.background,
+            movieData?.backdrop,
+            movieData?.background,
+            movie?.cover_big,
+            movie?.big_cover,
+            data?.cover_big,
+            data?.big_cover,
+            movie?.cover,
+            data?.cover,
+            movie?.stream_icon,
+            movie?.poster,
+            movie?.poster_path,
+            info?.poster,
+            info?.poster_path,
+            movieData?.poster,
+            movieData?.poster_path,
+            movie?.image,
+            movie?.movie_image,
+            movie?.thumb
+        );
+    }
+
+    getMoviePosterUrl(movie) {
+        const info = movie?.info || {};
+        const movieData = movie?.movie_data || {};
+        return this.getFirstImageUrl(
+            movie?.stream_icon,
+            movie?.cover,
+            movie?.cover_big,
+            movie?.big_cover,
+            movie?.poster,
+            movie?.poster_path,
+            info?.poster,
+            info?.poster_path,
+            movieData?.poster,
+            movieData?.poster_path,
+            movie?.backdrop_path,
+            movie?.backdrop
+        );
+    }
+
+    setDetailsBackdrop(imageUrl) {
+        if (!this.detailsPanel) return;
+        this.detailsBackdropLoadId += 1;
+        const loadId = this.detailsBackdropLoadId;
+        const panel = this.detailsPanel;
+        const cleanUrl = `${imageUrl || ''}`.trim().replace(/[\r\n\t]/g, '');
+        if (!cleanUrl) {
+            panel.style.removeProperty('--details-backdrop-image');
+            panel.style.removeProperty('--details-backdrop-size');
+            panel.style.removeProperty('--details-backdrop-position');
+            return;
+        }
+        panel.style.setProperty('--details-backdrop-image', `url("${cleanUrl}")`);
+        panel.style.setProperty('--details-backdrop-size', 'cover');
+        panel.style.setProperty('--details-backdrop-position', 'center center');
+
+        const img = new Image();
+        img.onload = () => {
+            if (loadId !== this.detailsBackdropLoadId) return;
+            const w = img.naturalWidth || 0;
+            const h = img.naturalHeight || 0;
+            if (!w || !h) return;
+
+            const imageRatio = w / h;
+            const panelRatio = panel.clientWidth > 0 && panel.clientHeight > 0
+                ? panel.clientWidth / panel.clientHeight
+                : (16 / 9);
+
+            let position = 'center center';
+
+            // Keep full-screen fill for all artwork while nudging focus.
+            if (imageRatio < panelRatio * 0.82) {
+                position = 'center 18%';
+            } else if (imageRatio > panelRatio * 2) {
+                // Extra-wide backdrops keep key subject matter in view a bit higher.
+                position = 'center 30%';
+            }
+
+            panel.style.setProperty('--details-backdrop-size', 'cover');
+            panel.style.setProperty('--details-backdrop-position', position);
+        };
+        img.src = cleanUrl;
     }
 
     getReleaseYear(item) {
@@ -226,6 +408,142 @@ class MoviesPage {
             '';
 
         return `${raw}`.trim();
+    }
+
+    getCardCastSnippet(movie) {
+        const rawCast = `${(
+            movie?.cast ||
+            movie?.actors ||
+            movie?.starring ||
+            movie?.info?.cast ||
+            movie?.info?.actors ||
+            movie?.movie_data?.cast ||
+            movie?.movie_data?.actors ||
+            movie?.data?.cast ||
+            movie?.data?.actors ||
+            ''
+        )}`.trim();
+        if (!rawCast) return '';
+        const firstTwo = rawCast
+            .split(',')
+            .map(name => name.trim())
+            .filter(Boolean)
+            .slice(0, 2);
+        return firstTwo.join(', ');
+    }
+
+    getCardCrewSnippet(movie) {
+        const rawCrew = `${(
+            movie?.director ||
+            movie?.directors ||
+            movie?.writer ||
+            movie?.writers ||
+            movie?.screenplay ||
+            movie?.info?.director ||
+            movie?.info?.directors ||
+            movie?.info?.writer ||
+            movie?.info?.writers ||
+            movie?.movie_data?.director ||
+            movie?.movie_data?.writer ||
+            movie?.data?.director ||
+            movie?.data?.writer ||
+            ''
+        )}`.trim();
+
+        if (!rawCrew) return '';
+        const first = rawCrew
+            .split(',')
+            .map(name => name.trim())
+            .filter(Boolean)
+            .slice(0, 1)
+            .join(', ');
+        return first ? `Dir: ${first}` : '';
+    }
+
+    getCardDescriptionSnippet(movie) {
+        const raw = `${movie?.plot || movie?.description || movie?.overview || ''}`.trim();
+        if (!raw) return '';
+        return raw.length > 92 ? `${raw.slice(0, 89)}...` : raw;
+    }
+
+    getMovieCardExtraText(movie) {
+        const plot = this.getCardDescriptionSnippet(movie);
+        return plot || '';
+    }
+
+    getMovieCast(details = null, movie = null) {
+        const info = details?.info || {};
+        const movieData = details?.movie_data || {};
+        const rawCast =
+            info.cast ||
+            info.actors ||
+            info.starring ||
+            movieData.cast ||
+            movieData.actors ||
+            movie?.cast ||
+            movie?.actors ||
+            '';
+
+        const cast = `${rawCast}`.trim();
+        if (!cast) return '';
+        return cast.length > 200 ? `${cast.slice(0, 197)}...` : cast;
+    }
+
+    toYoutubeWatchUrl(value) {
+        const raw = `${value || ''}`.trim();
+        if (!raw) return '';
+        if (/^[a-zA-Z0-9_-]{8,15}$/.test(raw)) {
+            return `https://www.youtube.com/watch?v=${raw}`;
+        }
+        if (/^https?:\/\//i.test(raw)) {
+            return raw;
+        }
+        return '';
+    }
+
+    getMovieTrailerUrl(details = null, movie = null) {
+        const info = details?.info || {};
+        const movieData = details?.movie_data || {};
+        const trailerCandidates = [
+            info.youtube_trailer,
+            info.youtube_trailer_id,
+            info.trailer,
+            info.trailer_url,
+            info.trailerUrl,
+            movieData.youtube_trailer,
+            movieData.trailer,
+            movieData.trailer_url,
+            movie?.youtube_trailer,
+            movie?.trailer,
+            movie?.trailer_url
+        ];
+
+        for (const candidate of trailerCandidates) {
+            const url = this.toYoutubeWatchUrl(candidate);
+            if (url) return url;
+        }
+        return '';
+    }
+
+    getMergedMovieData(movie, details = null) {
+        const info = details?.info || {};
+        const movieData = details?.movie_data || {};
+        return {
+            ...movie,
+            ...movieData,
+            ...info
+        };
+    }
+
+    async getMovieDetails(sourceId, streamId) {
+        const key = `${sourceId}:${streamId}`;
+        if (this.movieDetailsCache.has(key)) {
+            return this.movieDetailsCache.get(key);
+        }
+
+        const details = await API.proxy.xtream.vodInfo(sourceId, streamId);
+        this.movieDetailsCache.set(key, details || null);
+        return details || null;
     }
 
     async loadFavorites() {
@@ -506,10 +824,12 @@ class MoviesPage {
         card.dataset.movieId = movie.stream_id;
         card.dataset.sourceId = movie.sourceId;
 
-        const poster = movie.stream_icon || movie.cover || '/img/LurkedTV.png';
-        const year = movie.year || movie.releaseDate?.substring(0, 4) || '';
+        const poster = this.getMoviePosterUrl(movie) || '/img/LurkedTV.png';
+        const yearValue = this.getReleaseYear(movie);
+        const year = yearValue > 0 ? String(yearValue) : '';
         const normalizedRating = this.getMovieRating10(movie);
         const rating = normalizedRating > 0 ? `${Icons.star} ${Math.round(normalizedRating)}` : '';
+        const extra = this.getMovieCardExtraText(movie);
 
         const isFav = this.favoriteIds.has(`${movie.sourceId}:${movie.stream_id}`);
 
@@ -530,6 +850,7 @@ class MoviesPage {
                     ${year ? `<span>${year}</span>` : ''}
                     ${rating ? `<span>${rating}</span>` : ''}
                 </div>
+                ${extra ? `<div class="movie-meta-extra" title="${this.escapeHtml(extra)}">${this.escapeHtml(extra)}</div>` : ''}
             </div>
         `;
 
@@ -592,10 +913,12 @@ class MoviesPage {
         if (!movie || !this.detailsPanel) return;
 
         this.currentMovie = movie;
+        this.currentMovieDetails = null;
         this.container.classList.add('hidden');
         this.detailsPanel.classList.remove('hidden');
 
         const poster = movie.stream_icon || movie.cover || '/img/LurkedTV.png';
+        this.setDetailsBackdrop(this.getMovieBackdropUrl(movie));
         if (this.detailsPoster) {
             this.detailsPoster.onerror = () => {
                 this.detailsPoster.onerror = null;
@@ -611,28 +934,51 @@ class MoviesPage {
 
         let details = null;
         try {
-            details = await API.proxy.xtream.vodInfo(movie.sourceId, movie.stream_id);
+            details = await this.getMovieDetails(movie.sourceId, movie.stream_id);
+            this.currentMovieDetails = details;
         } catch (err) {
             console.warn('Failed to load movie details:', err.message);
         }
 
+        const merged = this.getMergedMovieData(movie, details);
+        this.setDetailsBackdrop(this.getMovieBackdropUrl(merged));
+
         if (this.detailsPlot) {
-            const synopsis = this.getMovieDescription(movie, details);
+            const synopsis = this.getMovieDescription(merged, details);
             this.detailsPlot.textContent = synopsis || 'Description unavailable.';
             this.detailsPlot.style.display = '';
         }
 
-        const year = this.getReleaseYear(movie);
-        const rating10 = this.getMovieRating10(movie);
-        const votes = this.getMovieVotes(movie);
-        const duration = movie.duration || movie.runtime || '';
+        if (this.detailsCast) {
+            const cast = this.getMovieCast(details, merged);
+            if (cast) {
+                this.detailsCast.textContent = `Cast: ${cast}`;
+                this.detailsCast.classList.remove('hidden');
+            } else {
+                this.detailsCast.textContent = '';
+                this.detailsCast.classList.add('hidden');
+            }
+        }
+
+        const trailerUrl = this.getMovieTrailerUrl(details, merged);
+        if (this.detailsTrailerBtn) {
+            this.detailsTrailerBtn.classList.toggle('hidden', !trailerUrl);
+            this.detailsTrailerBtn.disabled = !trailerUrl;
+        }
+
+        const year = this.getReleaseYear(merged);
+        const rating10 = this.getMovieRating10(merged);
+        const votes = this.getMovieVotes(merged);
+        const duration = merged.duration || merged.runtime || '';
 
         if (this.detailsMeta) {
             const metaBits = [];
             if (year > 0) metaBits.push(`<span>${year}</span>`);
             if (duration) metaBits.push(`<span>${duration}</span>`);
-            if (movie.genre) metaBits.push(`<span>${movie.genre}</span>`);
-            if (movie.container_extension) metaBits.push(`<span>${String(movie.container_extension).toUpperCase()}</span>`);
+            if (merged.genre) metaBits.push(`<span>${merged.genre}</span>`);
+            if (merged.country) metaBits.push(`<span>${merged.country}</span>`);
+            if (merged.director) metaBits.push(`<span>Dir: ${merged.director}</span>`);
+            if (merged.container_extension) metaBits.push(`<span>${String(merged.container_extension).toUpperCase()}</span>`);
             this.detailsMeta.innerHTML = metaBits.join('');
         }
 
@@ -653,15 +999,25 @@ class MoviesPage {
         if (this.detailsPanel) {
             this.detailsPanel.classList.add('hidden');
         }
+        this.setDetailsBackdrop('');
         this.container.classList.remove('hidden');
         this.currentMovie = null;
+        this.currentMovieDetails = null;
     }
 
     async playMovie(movie) {
         try {
+            let details = null;
+            try {
+                details = await this.getMovieDetails(movie.sourceId, movie.stream_id);
+            } catch (err) {
+                console.warn('Failed to load movie metadata before playback:', err.message);
+            }
+
+            const merged = this.getMergedMovieData(movie, details);
             // Get stream URL for movie using the actual container extension from API
             // Xtream API returns container_extension (e.g., 'mp4', 'mkv', 'avi')
-            const container = movie.container_extension || 'mp4';
+            const container = merged.container_extension || 'mp4';
             const result = await API.proxy.xtream.getStreamUrl(movie.sourceId, movie.stream_id, 'movie', container);
 
             if (result && result.url) {
@@ -670,12 +1026,12 @@ class MoviesPage {
                     this.app.pages.watch.play({
                         type: 'movie',
                         id: movie.stream_id,
-                        title: movie.name,
-                        poster: movie.stream_icon || movie.cover,
-                        description: movie.plot || '',
-                        year: movie.year || movie.releaseDate?.substring(0, 4),
-                        rating: movie.rating,
-                        duration: movie.duration || movie.runtime || '',
+                        title: merged.name || movie.name,
+                        poster: merged.stream_icon || merged.cover || movie.stream_icon || movie.cover,
+                        description: this.getMovieDescription(merged, details),
+                        year: this.getReleaseYear(merged) || movie.year || movie.releaseDate?.substring(0, 4),
+                        rating: this.getMovieRating10(merged) || merged.rating,
+                        duration: merged.duration || merged.runtime || '',
                         sourceId: movie.sourceId,
                         categoryId: movie.category_id,
                         containerExtension: container

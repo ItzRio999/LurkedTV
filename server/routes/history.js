@@ -166,6 +166,22 @@ router.post('/', (req, res) => {
             JSON.stringify(data || {})
         );
 
+        const reason = String(data?.reason || '').toLowerCase();
+        if (normalizedType === 'movie' && reason === 'play') {
+            console.log('[DiscordBotPlayback] movie_started', JSON.stringify({
+                userId,
+                sourceId: normalizedSourceId,
+                itemId: String(id),
+                title: String(data?.title || ''),
+                subtitle: String(data?.subtitle || ''),
+                poster: String(data?.poster || ''),
+                containerExtension: String(data?.containerExtension || 'mp4'),
+                progress: numericProgress,
+                duration: numericDuration,
+                updatedAt: timestamp
+            }));
+        }
+
         res.json({ success: true, timestamp });
     } catch (err) {
         console.error('[History] Error saving progress:', err);

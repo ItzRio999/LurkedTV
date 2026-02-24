@@ -12,6 +12,8 @@ class SeriesPage {
         this.languageSelect = document.getElementById('series-language-select');
         this.searchInput = document.getElementById('series-search');
         this.detailsPanel = document.getElementById('series-details');
+        this.detailsCast = document.getElementById('series-cast');
+        this.detailsTrailerBtn = document.getElementById('series-details-trailer-btn');
         this.seasonsContainer = document.getElementById('series-seasons');
 
         this.seriesList = [];
@@ -24,9 +26,12 @@ class SeriesPage {
         this.observer = null;
         this.hiddenCategoryIds = new Set();
         this.currentSeries = null;
+        this.currentSeriesInfo = null;
+        this.seriesInfoCache = new Map();
         this.favoriteIds = new Set(); // Track favorite series IDs
         this.showFavoritesOnly = false;
         this.categoryNameMap = new Map();
+        this.detailsBackdropLoadId = 0;
 
         this.init();
     }
@@ -74,6 +79,13 @@ class SeriesPage {
             favBtn.classList.toggle('active', this.showFavoritesOnly);
             this.filterAndRender();
         });
+
+        this.detailsTrailerBtn?.addEventListener('click', () => {
+            const url = this.getSeriesTrailerUrl(this.currentSeriesInfo, this.currentSeries);
+            if (url) {
+                window.open(url, '_blank', 'noopener,noreferrer');
+            }
+        });
     }
 
     async show() {
@@ -114,6 +126,164 @@ class SeriesPage {
         if (value === null || value === undefined) return fallback;
         const parsed = Number.parseFloat(`${value}`.replace(/[^0-9.\-]/g, ''));
         return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    collectImageUrls(value, bucket = []) {
+        if (value === null || value === undefined) return bucket;
+
+        if (Array.isArray(value)) {
+            value.forEach(entry => this.collectImageUrls(entry, bucket));
+            return bucket;
+        }
+
+        if (typeof value === 'object') {
+            const keys = ['url', 'src', 'image', 'poster', 'backdrop', 'cover', 'big_cover', 'cover_big', 'movie_image', 'thumb', 'original'];
+            keys.forEach(key => this.collectImageUrls(value?.[key], bucket));
+            return bucket;
+        }
+
+        const raw = `${value}`.trim();
+        if (!raw) return bucket;
+        const lowered = raw.toLowerCase();
+        if (lowered === 'null' || lowered === 'undefined' || lowered === 'n/a' || lowered === '[]' || lowered === '{}') {
+            return bucket;
+        }
+
+        if (raw.startsWith('[') || raw.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(raw);
+                this.collectImageUrls(parsed, bucket);
+                if (bucket.length > 0) return bucket;
+            } catch (_) {
+                // Fallback to string parsing below.
+            }
+        }
+
+        const normalized = raw.replace(/\\\//g, '/').replace(/[\r\n\t]/g, '').trim();
+        if (!normalized) return bucket;
+
+        const matches = normalized.match(/https?:\/\/[^"'\\\],\s]+/gi);
+        if (matches && matches.length > 1) {
+            matches.forEach(url => bucket.push(url.trim()));
+            return bucket;
+        }
+
+        const clean = normalized.replace(/^["']+|["']+$/g, '').trim();
+        if (!clean) return bucket;
+
+        if (!/^data:image\//i.test(clean) && clean.includes(',')) {
+            clean.split(',').map(part => part.trim()).filter(Boolean).forEach(part => bucket.push(part));
+            return bucket;
+        }
+
+        bucket.push(clean);
+        return bucket;
+    }
+
+    isLikelyImageUrl(url) {
+        const value = `${url || ''}`.trim();
+        if (!value) return false;
+        const lowered = value.toLowerCase();
+        if (lowered === 'null' || lowered === 'undefined' || lowered === 'n/a') return false;
+        return (
+            value.startsWith('http://') ||
+            value.startsWith('https://') ||
+            value.startsWith('//') ||
+            value.startsWith('/') ||
+            value.startsWith('img/') ||
+            /^data:image\//i.test(value) ||
+            /\.(avif|gif|jpe?g|png|webp)(\?|$)/i.test(value)
+        );
+    }
+
+    getFirstImageUrl(...values) {
+        const raw = [];
+        values.forEach(value => this.collectImageUrls(value, raw));
+        const unique = [...new Set(raw.map(url => `${url}`.trim()).filter(Boolean))];
+        return unique.find(url => this.isLikelyImageUrl(url)) || '';
+    }
+
+    getSeriesBackdropUrl(series) {
+        const info = series?.info || {};
+        const data = series?.data || {};
+        return this.getFirstImageUrl(
+            series?.backdrop_path,
+            info?.backdrop_path,
+            data?.backdrop_path,
+            series?.backdrop,
+            info?.backdrop,
+            info?.background,
+            series?.cover_big,
+            series?.big_cover,
+            data?.cover_big,
+            data?.big_cover,
+            series?.cover,
+            data?.cover,
+            series?.poster,
+            series?.poster_path,
+            info?.poster,
+            info?.poster_path,
+            series?.image,
+            series?.movie_image,
+            series?.thumb
+        );
+    }
+
+    getSeriesPosterUrl(series) {
+        const info = series?.info || {};
+        return this.getFirstImageUrl(
+            series?.cover,
+            series?.cover_big,
+            series?.big_cover,
+            series?.poster,
+            series?.poster_path,
+            info?.poster,
+            info?.poster_path,
+            series?.backdrop_path,
+            series?.backdrop
+        );
+    }
+
+    setDetailsBackdrop(imageUrl) {
+        if (!this.detailsPanel) return;
+        this.detailsBackdropLoadId += 1;
+        const loadId = this.detailsBackdropLoadId;
+        const panel = this.detailsPanel;
+        const cleanUrl = `${imageUrl || ''}`.trim().replace(/[\r\n\t]/g, '');
+        if (!cleanUrl) {
+            panel.style.removeProperty('--details-backdrop-image');
+            panel.style.removeProperty('--details-backdrop-size');
+            panel.style.removeProperty('--details-backdrop-position');
+            return;
+        }
+        panel.style.setProperty('--details-backdrop-image', `url("${cleanUrl}")`);
+        panel.style.setProperty('--details-backdrop-size', 'cover');
+        panel.style.setProperty('--details-backdrop-position', 'center center');
+
+        const img = new Image();
+        img.onload = () => {
+            if (loadId !== this.detailsBackdropLoadId) return;
+            const w = img.naturalWidth || 0;
+            const h = img.naturalHeight || 0;
+            if (!w || !h) return;
+
+            const imageRatio = w / h;
+            const panelRatio = panel.clientWidth > 0 && panel.clientHeight > 0
+                ? panel.clientWidth / panel.clientHeight
+                : (16 / 9);
+
+            let position = 'center center';
+
+            if (imageRatio < panelRatio * 0.82) {
+                position = 'center 18%';
+            } else if (imageRatio > panelRatio * 2) {
+                position = 'center 30%';
+            }
+
+            panel.style.setProperty('--details-backdrop-size', 'cover');
+            panel.style.setProperty('--details-backdrop-position', position);
+        };
+        img.src = cleanUrl;
     }
 
     getReleaseYear(item) {
@@ -227,6 +397,91 @@ class SeriesPage {
             seriesPoster ||
             '/img/LurkedTV.png'
         );
+    }
+
+    getCardCastSnippet(series) {
+        const rawCast = `${series?.cast || series?.actors || series?.starring || ''}`.trim();
+        if (!rawCast) return '';
+        const firstTwo = rawCast
+            .split(',')
+            .map(name => name.trim())
+            .filter(Boolean)
+            .slice(0, 2);
+        return firstTwo.join(', ');
+    }
+
+    getCardDescriptionSnippet(series) {
+        const raw = `${series?.plot || series?.description || series?.overview || ''}`.trim();
+        if (!raw) return '';
+        return raw.length > 92 ? `${raw.slice(0, 89)}...` : raw;
+    }
+
+    getSeriesCardExtraText(series) {
+        return '';
+    }
+
+    getSeriesDescription(series, details = null) {
+        const info = details?.info || {};
+        const raw = info.plot || info.description || info.overview || series?.plot || series?.description || '';
+        return `${raw}`.trim();
+    }
+
+    getSeriesCast(details = null, series = null) {
+        const info = details?.info || {};
+        const rawCast =
+            info.cast ||
+            info.actors ||
+            info.starring ||
+            series?.cast ||
+            series?.actors ||
+            '';
+
+        const cast = `${rawCast}`.trim();
+        if (!cast) return '';
+        return cast.length > 200 ? `${cast.slice(0, 197)}...` : cast;
+    }
+
+    toYoutubeWatchUrl(value) {
+        const raw = `${value || ''}`.trim();
+        if (!raw) return '';
+        if (/^[a-zA-Z0-9_-]{8,15}$/.test(raw)) {
+            return `https://www.youtube.com/watch?v=${raw}`;
+        }
+        if (/^https?:\/\//i.test(raw)) {
+            return raw;
+        }
+        return '';
+    }
+
+    getSeriesTrailerUrl(details = null, series = null) {
+        const info = details?.info || {};
+        const trailerCandidates = [
+            info.youtube_trailer,
+            info.youtube_trailer_id,
+            info.trailer,
+            info.trailer_url,
+            info.trailerUrl,
+            series?.youtube_trailer,
+            series?.trailer,
+            series?.trailer_url
+        ];
+
+        for (const candidate of trailerCandidates) {
+            const url = this.toYoutubeWatchUrl(candidate);
+            if (url) return url;
+        }
+        return '';
+    }
+
+    async getSeriesInfo(sourceId, seriesId) {
+        const key = `${sourceId}:${seriesId}`;
+        if (this.seriesInfoCache.has(key)) {
+            return this.seriesInfoCache.get(key);
+        }
+
+        const info = await API.proxy.xtream.seriesInfo(sourceId, seriesId);
+        this.seriesInfoCache.set(key, info || null);
+        return info || null;
     }
 
     async loadFavorites() {
@@ -494,6 +749,7 @@ class SeriesPage {
             const year = series.year || series.releaseDate?.substring(0, 4) || '';
             const normalizedRating = this.getSeriesRating10(series);
             const rating = normalizedRating > 0 ? `${Icons.star} ${Math.round(normalizedRating)}` : '';
+            const extra = this.getSeriesCardExtraText(series);
 
             const isFav = this.favoriteIds.has(`${series.sourceId}:${series.series_id}`);
 
@@ -514,6 +770,7 @@ class SeriesPage {
                         ${year ? `<span>${year}</span>` : ''}
                         ${rating ? `<span>${rating}</span>` : ''}
                     </div>
+                    ${extra ? `<div class="series-meta-extra" title="${this.escapeHtml(extra)}">${this.escapeHtml(extra)}</div>` : ''}
                 </div>
             `;
 
@@ -547,26 +804,37 @@ class SeriesPage {
 
     async showSeriesDetails(series) {
         this.currentSeries = series;
+        this.currentSeriesInfo = null;
 
         // Show details panel
         this.container.classList.add('hidden');
         this.detailsPanel.classList.remove('hidden');
+        this.setDetailsBackdrop(this.getSeriesBackdropUrl(series));
 
         // Set header info
-        document.getElementById('series-poster').src = series.cover || '/img/LurkedTV.png';
+        document.getElementById('series-poster').src = this.getSeriesPosterUrl(series) || '/img/LurkedTV.png';
         document.getElementById('series-title').textContent = series.name;
-        document.getElementById('series-plot').textContent = series.plot || '';
+        document.getElementById('series-plot').textContent = this.getSeriesDescription(series) || '';
         document.getElementById('series-details-meta').innerHTML = '';
         document.getElementById('series-details-rating-score').textContent = '';
         document.getElementById('series-details-rating-count').textContent = '';
+        if (this.detailsCast) {
+            this.detailsCast.textContent = '';
+            this.detailsCast.classList.add('hidden');
+        }
+        if (this.detailsTrailerBtn) {
+            this.detailsTrailerBtn.classList.add('hidden');
+            this.detailsTrailerBtn.disabled = true;
+        }
 
         // Show loading
         this.seasonsContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
 
         try {
             // Fetch series info (seasons/episodes)
-            const info = await API.proxy.xtream.seriesInfo(series.sourceId, series.series_id);
+            const info = await this.getSeriesInfo(series.sourceId, series.series_id);
             const merged = { ...series, ...(info?.info || {}) };
+            this.setDetailsBackdrop(this.getSeriesBackdropUrl(merged));
             const seasonsObj = info?.episodes || {};
             const seasonKeys = Object.keys(seasonsObj);
             const totalEpisodes = seasonKeys.reduce((acc, seasonNum) => {
@@ -581,14 +849,38 @@ class SeriesPage {
             if (year > 0) metaBits.push(`<span>${year}</span>`);
             if (totalEpisodes > 0) metaBits.push(`<span>${totalEpisodes} Episodes</span>`);
             if (merged.genre) metaBits.push(`<span>${merged.genre}</span>`);
+            if (merged.country) metaBits.push(`<span>${merged.country}</span>`);
+            if (merged.director) metaBits.push(`<span>Dir: ${merged.director}</span>`);
 
             document.getElementById('series-details-meta').innerHTML = metaBits.join('');
+            document.getElementById('series-plot').textContent = this.getSeriesDescription(merged, info) || 'Description unavailable.';
+
+            if (this.detailsCast) {
+                const cast = this.getSeriesCast(info, merged);
+                if (cast) {
+                    this.detailsCast.textContent = `Cast: ${cast}`;
+                    this.detailsCast.classList.remove('hidden');
+                } else {
+                    this.detailsCast.textContent = '';
+                    this.detailsCast.classList.add('hidden');
+                }
+            }
+
+            const trailerUrl = this.getSeriesTrailerUrl(info, merged);
+            if (this.detailsTrailerBtn) {
+                this.detailsTrailerBtn.classList.toggle('hidden', !trailerUrl);
+                this.detailsTrailerBtn.disabled = !trailerUrl;
+            }
+
             if (rating10 > 0) {
                 document.getElementById('series-details-rating-score').innerHTML = `${Icons.star} ${rating10.toFixed(1)}/10`;
             } else {
                 document.getElementById('series-details-rating-score').textContent = 'Not Rated';
             }
             document.getElementById('series-details-rating-count').textContent = this.formatVotes(votes);
+
+            this.currentSeries = merged;
+            this.currentSeriesInfo = info;
 
             if (!info || !info.episodes) {
                 this.seasonsContainer.innerHTML = '<p class="hint">No episodes found</p>';
@@ -667,8 +959,10 @@ class SeriesPage {
 
     hideDetails() {
         this.detailsPanel.classList.add('hidden');
+        this.setDetailsBackdrop('');
         this.container.classList.remove('hidden');
         this.currentSeries = null;
+        this.currentSeriesInfo = null;
     }
 
     async playEpisode(episodeEl) {

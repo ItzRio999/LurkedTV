@@ -48,6 +48,7 @@ router.post('/session', async (req, res) => {
             userAgent,
             seekOffset: seekOffset || 0,
             hwEncoder: settings.hwEncoder || 'software',
+            hagsEnabled: settings.hagsEnabled === true,
             maxResolution: settings.maxResolution || '1080p',
             quality: settings.quality || 'medium',
             audioMixPreset: settings.audioMixPreset || 'auto', // Audio downmix preset
@@ -225,8 +226,10 @@ router.get('/', async (req, res) => {
         '-fflags', '+genpts+discardcorrupt+nobuffer',
         // Ignore errors in stream and continue
         '-err_detect', 'ignore_err',
+        // HAGS hint mode: reduce buffering to favor responsiveness
+        ...(settings.hagsEnabled ? ['-flags', 'low_delay'] : []),
         // Limit max demux delay to prevent buffering issues
-        '-max_delay', '2000000',
+        '-max_delay', settings.hagsEnabled ? '0' : '2000000',
         // Reconnect settings for network drops (useful for live streams)
         '-reconnect', '1',
         '-reconnect_streamed', '1',

@@ -63,6 +63,7 @@ function getDefaultSettings() {
     lastVolume: 80,
     autoPlayNextEpisode: false,
     forceProxy: false,
+    hagsEnabled: false,          // User-provided hint: OS HAGS is enabled
     forceTranscode: false, // Force Audio Transcode
     forceVideoTranscode: false, // Force Video Transcode
     forceRemux: false,
@@ -87,7 +88,13 @@ function getDefaultSettings() {
     // Auto profile metadata
     autoProfileVersion: 0,
     autoProfileAppliedAt: null,
-    autoProfileSummary: ''
+    autoProfileSummary: '',
+    // Discord bot configuration
+    discordBotPrefix: '!',
+    discordGuildId: '1356477545964372048',
+    discordAdminRoleId: '1356477545989799990',
+    discordActiveWindowMs: 300000,
+    discordCommandDedupeWindowMs: 15000
   };
 }
 
@@ -463,6 +470,11 @@ const users = {
     return db.users?.find(u => u.firebaseUid === firebaseUid);
   },
 
+  async getByDiscordId(discordId) {
+    const db = await loadDb();
+    return db.users?.find(u => String(u.discordId || '') === String(discordId || ''));
+  },
+
   async create(userData) {
     const db = await loadDb();
     if (!db.users) {
@@ -482,6 +494,7 @@ const users = {
       role: userData.role || 'viewer',
       oidcId: userData.oidcId || null,
       firebaseUid: userData.firebaseUid || null,
+      discordId: userData.discordId || null,
       email: userData.email || null,
       defaultLanguage: userData.defaultLanguage || '',
       createdAt: new Date().toISOString()

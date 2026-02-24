@@ -7,6 +7,8 @@ class SettingsPage {
         this.app = app;
         this.tabs = document.querySelectorAll('.tabs .tab');
         this.tabContents = document.querySelectorAll('.tab-content');
+        this.discordBotStatusTimer = null;
+        this.discordBotConfigLoaded = false;
 
         this.init();
     }
@@ -25,6 +27,7 @@ class SettingsPage {
 
         // User management (admin only)
         this.initUserManagement();
+        this.initDiscordBotAdmin();
 
         // Firebase media cache controls
         this.initFirebaseCacheControls();
@@ -33,10 +36,176 @@ class SettingsPage {
         this.initAccountSettings();
     }
 
+    initDiscordBotAdmin() {
+        const refreshBtn = document.getElementById('discord-bot-refresh-btn');
+        const form = document.getElementById('discord-bot-config-form');
+
+        refreshBtn?.addEventListener('click', async () => {
+            await this.loadDiscordBotStatus(true);
+        });
+
+        form?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const feedback = document.getElementById('discord-bot-status-feedback');
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const originalText = submitBtn?.textContent || 'Save Bot Config';
+
+            const payload = {
+                prefix: document.getElementById('discord-bot-prefix')?.value || '!',
+                guildId: document.getElementById('discord-bot-guild-id')?.value || '',
+                adminRoleId: document.getElementById('discord-bot-admin-role-id')?.value || '',
+                activeWindowMs: Number(document.getElementById('discord-bot-active-window-ms')?.value || 300000),
+                commandDedupeWindowMs: Number(document.getElementById('discord-bot-dedupe-window-ms')?.value || 15000)
+            };
+
+            try {
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Saving...';
+                }
+                if (feedback) feedback.textContent = 'Saving Discord bot config...';
+
+                await API.settings.updateDiscordBotConfig(payload);
+                if (feedback) feedback.textContent = 'Discord bot config saved.';
+                this.showToast('Discord bot config updated.', 'success');
+                await this.loadDiscordBotStatus();
+            } catch (err) {
+                if (feedback) feedback.textContent = `Failed to save config: ${err.message}`;
+                this.showToast('Failed to save Discord bot config.', 'error');
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                }
+            }
+        });
+    }
+
+    setDiscordBotStatusText(id, text, ok = null) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = text;
+        el.style.color = ok === true
+            ? 'var(--color-success)'
+            : (ok === false ? 'var(--color-error)' : 'var(--color-text-muted)');
+    }
+
+    formatAge(ms) {
+        if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+        if (ms < 1000) return `${Math.floor(ms)}ms`;
+        if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+        return `${Math.floor(ms / 60000)}m`;
+    }
+
+    async loadDiscordBotStatus(showToastOnError = false) {
+        const feedback = document.getElementById('discord-bot-status-feedback');
+        try {
+            const data = await API.settings.getDiscordBotStatus();
+            const config = data?.config || {};
+            const monitor = data?.monitor || {};
+            const heartbeat = monitor.heartbeat || {};
+
+            if (!this.discordBotConfigLoaded) {
+                const prefixInput = document.getElementById('discord-bot-prefix');
+                const guildInput = document.getElementById('discord-bot-guild-id');
+                const roleInput = document.getElementById('discord-bot-admin-role-id');
+                const activeInput = document.getElementById('discord-bot-active-window-ms');
+                const dedupeInput = document.getElementById('discord-bot-dedupe-window-ms');
+                if (prefixInput) prefixInput.value = config.prefix || '!';
+                if (guildInput) guildInput.value = config.guildId || '';
+                if (roleInput) roleInput.value = config.adminRoleId || '';
+                if (activeInput) activeInput.value = Number(config.activeWindowMs || 300000);
+                if (dedupeInput) dedupeInput.value = Number(config.commandDedupeWindowMs || 15000);
+                this.discordBotConfigLoaded = true;
+            }
+
+            this.setDiscordBotStatusText(
+                'discord-bot-heartbeat-status',
+                heartbeat.online
+                    ? `Online (${this.formatAge(heartbeat.ageMs)} ago)`
+                    : (heartbeat.lastSeenAt ? `Offline (${this.formatAge(heartbeat.ageMs)} ago)` : 'No heartbeat yet'),
+                heartbeat.online
+            );
+
+            const identityOk = !!monitor?.botIdentity?.ok;
+            this.setDiscordBotStatusText(
+                'discord-bot-identity-status',
+                identityOk
+                    ? `${monitor.botIdentity.tag || 'Bot'} (${monitor.botIdentity.id || ''})`
+                    : `Not reachable${monitor?.botIdentity?.error ? `: ${monitor.botIdentity.error}` : ''}`,
+                identityOk
+            );
+
+            const guildOk = !!monitor?.guildStatus?.ok;
+            this.setDiscordBotStatusText(
+                'discord-bot-guild-status',
+                guildOk
+                    ? `${monitor.guildStatus.name || 'Guild'} (${monitor.guildStatus.id || ''})`
+                    : `Not connected${monitor?.guildStatus?.error ? `: ${monitor.guildStatus.error}` : ''}`,
+                guildOk
+            );
+
+            const roleOk = !!monitor?.roleStatus?.ok;
+            this.setDiscordBotStatusText(
+                'discord-bot-role-status',
+                roleOk
+                    ? `${monitor.roleStatus.name || 'Role'} (${monitor.roleStatus.id || ''})`
+                    : `Missing${monitor?.roleStatus?.error ? `: ${monitor.roleStatus.error}` : ''}`,
+                roleOk
+            );
+
+            if (feedback) {
+                feedback.textContent = `Config prefix ${config.prefix || '!'} | Guild ${config.guildId || 'unset'} | Role ${config.adminRoleId || 'unset'}`;
+            }
+        } catch (err) {
+            console.error('Failed to load Discord bot status:', err);
+            this.setDiscordBotStatusText('discord-bot-heartbeat-status', 'Unavailable', false);
+            this.setDiscordBotStatusText('discord-bot-identity-status', 'Unavailable', false);
+            this.setDiscordBotStatusText('discord-bot-guild-status', 'Unavailable', false);
+            this.setDiscordBotStatusText('discord-bot-role-status', 'Unavailable', false);
+            if (feedback) feedback.textContent = `Failed to load bot status: ${err.message}`;
+            if (showToastOnError) this.showToast('Failed to load Discord bot status.', 'error');
+        }
+    }
+
+    startDiscordBotStatusPolling() {
+        this.stopDiscordBotStatusPolling();
+        this.loadDiscordBotStatus();
+        this.discordBotStatusTimer = setInterval(() => {
+            this.loadDiscordBotStatus();
+        }, 15000);
+    }
+
+    stopDiscordBotStatusPolling() {
+        if (this.discordBotStatusTimer) {
+            clearInterval(this.discordBotStatusTimer);
+            this.discordBotStatusTimer = null;
+        }
+    }
+
+    showToast(message, type = 'success', duration = 3200) {
+        const container = document.getElementById('toast-container');
+        if (!container || !message) return;
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+
+        requestAnimationFrame(() => toast.classList.add('show'));
+
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 220);
+        }, duration);
+    }
+
     initAccountSettings() {
         const languageSelect = document.getElementById('setting-default-language');
         const passwordForm = document.getElementById('account-password-form');
         const feedback = document.getElementById('account-password-feedback');
+        const discordActionBtn = document.getElementById('account-discord-action-btn');
+        const discordFeedback = document.getElementById('account-discord-feedback');
 
         languageSelect?.addEventListener('change', async () => {
             try {
@@ -76,6 +245,31 @@ class SettingsPage {
                 if (feedback) feedback.textContent = `Password update failed: ${err.message}`;
             }
         });
+
+        discordActionBtn?.addEventListener('click', async () => {
+            const linked = !!this.app?.currentUser?.discordLinked;
+            if (linked) {
+                if (!window.confirm('Unlink your Discord account from this LurkedTV profile?')) return;
+                try {
+                    if (discordFeedback) discordFeedback.textContent = 'Unlinking Discord account...';
+                    await API.account.unlinkDiscord();
+                    await this.loadAccountSettings();
+                    if (discordFeedback) discordFeedback.textContent = 'Discord account unlinked.';
+                } catch (err) {
+                    if (discordFeedback) discordFeedback.textContent = `Failed to unlink Discord: ${err.message}`;
+                }
+                return;
+            }
+
+            try {
+                if (discordFeedback) discordFeedback.textContent = 'Redirecting to Discord...';
+                const result = await API.account.startDiscordLink();
+                if (!result?.url) throw new Error('Missing Discord authorization URL');
+                window.location.href = result.url;
+            } catch (err) {
+                if (discordFeedback) discordFeedback.textContent = `Failed to start Discord link: ${err.message}`;
+            }
+        });
     }
 
     applyDefaultLanguagePreference(languageCode) {
@@ -99,6 +293,14 @@ class SettingsPage {
         const emailEl = document.getElementById('account-email');
         const badgeEl = document.getElementById('account-email-verified-badge');
         const languageSelect = document.getElementById('setting-default-language');
+        const discordStatusEl = document.getElementById('account-discord-status');
+        const discordActionBtn = document.getElementById('account-discord-action-btn');
+        const discordFeedback = document.getElementById('account-discord-feedback');
+        const discordCard = document.getElementById('account-discord-card');
+        const discordAvatar = document.getElementById('account-discord-avatar');
+        const discordName = document.getElementById('account-discord-name');
+        const discordHandle = document.getElementById('account-discord-handle');
+        const discordMemberStatus = document.getElementById('account-discord-member-status');
 
         try {
             const user = await API.account.getMe();
@@ -116,6 +318,56 @@ class SettingsPage {
             if (languageSelect) {
                 languageSelect.value = user.defaultLanguage || '';
             }
+
+            if (discordStatusEl) {
+                discordStatusEl.textContent = user.discordLinked ? 'Linked' : 'Not linked';
+            }
+
+            const linked = !!user.discordLinked;
+            if (discordCard) discordCard.classList.toggle('hidden', !linked);
+            if (discordAvatar) {
+                discordAvatar.src = linked && user.discordAvatarUrl ? user.discordAvatarUrl : '';
+            }
+            if (discordName) {
+                discordName.textContent = linked ? (user.discordDisplayName || user.discordUsername || 'Discord User') : 'Discord User';
+            }
+            if (discordHandle) {
+                discordHandle.textContent = linked && user.discordUsername ? `@${user.discordUsername}` : '@username';
+            }
+            if (discordMemberStatus) {
+                const memberLabel = user.discordMemberStatus === 'in_server'
+                    ? 'Member status: In server'
+                    : (user.discordMemberStatus === 'not_in_server' ? 'Member status: Not in server' : 'Member status: Unknown');
+                discordMemberStatus.textContent = linked ? memberLabel : 'Status unknown';
+            }
+
+            if (discordActionBtn) {
+                discordActionBtn.textContent = user.discordLinked ? 'Unlink Discord' : 'Link Discord';
+                discordActionBtn.classList.toggle('btn-error', !!user.discordLinked);
+                discordActionBtn.classList.toggle('btn-secondary', !user.discordLinked);
+            }
+
+            const query = new URLSearchParams(window.location.search);
+            const discordStatus = query.get('discord');
+            if (discordFeedback && discordStatus) {
+                if (discordStatus === 'linked') {
+                    discordFeedback.textContent = 'Discord account linked successfully.';
+                    this.showToast('Discord linked successfully.', 'success');
+                } else if (discordStatus === 'already_linked') {
+                    discordFeedback.textContent = 'That Discord account is already linked to another LurkedTV user.';
+                    this.showToast('That Discord account is already linked.', 'error');
+                } else if (discordStatus.startsWith('link_failed')) {
+                    discordFeedback.textContent = 'Discord linking failed. Please try again.';
+                    this.showToast('Discord linking failed. Please try again.', 'error');
+                }
+
+                if (window.location.search.includes('discord=')) {
+                    const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
+                    window.history.replaceState({}, document.title, cleanUrl);
+                }
+            }
+
+            await this.updateAdminDashboardVisibility(user);
         } catch (err) {
             console.error('Error loading account settings:', err);
             if (emailEl) emailEl.textContent = 'Unable to load account';
@@ -123,6 +375,33 @@ class SettingsPage {
                 badgeEl.textContent = 'Unknown';
                 badgeEl.classList.remove('verified');
             }
+            if (discordStatusEl) discordStatusEl.textContent = 'Unknown';
+            if (discordCard) discordCard.classList.add('hidden');
+            await this.updateAdminDashboardVisibility(null);
+        }
+    }
+
+    async updateAdminDashboardVisibility(user = this.app?.currentUser || null) {
+        const usersTab = document.getElementById('users-tab');
+        if (!usersTab) return;
+
+        let isAdmin = false;
+        if (user && typeof user.discordAdmin === 'boolean') {
+            isAdmin = user.discordAdmin;
+        } else if (user) {
+            try {
+                const status = await API.account.getDiscordAdminStatus();
+                isAdmin = !!status?.isAdmin;
+                this.app.currentUser = { ...this.app.currentUser, discordAdmin: isAdmin };
+            } catch (err) {
+                console.warn('Unable to verify Discord admin status:', err.message);
+            }
+        }
+
+        usersTab.style.display = isAdmin ? 'block' : 'none';
+
+        if (!isAdmin && document.getElementById('tab-users')?.classList.contains('active')) {
+            this.switchTab('sources');
         }
     }
 
@@ -202,6 +481,7 @@ class SettingsPage {
 
         // Stream processing (use -tc suffix IDs from Transcoding tab)
         const forceProxyToggle = document.getElementById('setting-force-proxy-tc');
+        const hagsEnabledToggle = document.getElementById('setting-hags-enabled');
         const autoTranscodeToggle = document.getElementById('setting-auto-transcode-tc');
         const forceTranscodeToggle = document.getElementById('setting-force-transcode-tc');
         const forceVideoTranscodeToggle = document.getElementById('setting-force-video-transcode-tc');
@@ -228,6 +508,7 @@ class SettingsPage {
         if (maxResolutionSelect) maxResolutionSelect.value = s.maxResolution || '1080p';
         if (qualitySelect) qualitySelect.value = s.quality || 'medium';
         if (forceProxyToggle) forceProxyToggle.checked = s.forceProxy === true;
+        if (hagsEnabledToggle) hagsEnabledToggle.checked = s.hagsEnabled === true;
         if (autoTranscodeToggle) autoTranscodeToggle.checked = s.autoTranscode !== false;
         if (forceTranscodeToggle) forceTranscodeToggle.checked = s.forceTranscode === true;
         if (forceVideoTranscodeToggle) forceVideoTranscodeToggle.checked = s.forceVideoTranscode === true;
@@ -308,6 +589,11 @@ class SettingsPage {
             this.app.player.saveSettings();
         });
 
+        hagsEnabledToggle?.addEventListener('change', () => {
+            this.app.player.settings.hagsEnabled = hagsEnabledToggle.checked;
+            this.app.player.saveSettings();
+        });
+
         autoTranscodeToggle?.addEventListener('change', () => {
             this.app.player.settings.autoTranscode = autoTranscodeToggle.checked;
             this.app.player.saveSettings();
@@ -352,6 +638,7 @@ class SettingsPage {
                 if (qualitySelect) qualitySelect.value = applied.quality || 'medium';
                 if (audioMixSelect) audioMixSelect.value = applied.audioMixPreset || 'auto';
                 if (forceProxyToggle) forceProxyToggle.checked = applied.forceProxy === true;
+                if (hagsEnabledToggle) hagsEnabledToggle.checked = applied.hagsEnabled === true;
                 if (autoTranscodeToggle) autoTranscodeToggle.checked = applied.autoTranscode !== false;
                 if (forceTranscodeToggle) forceTranscodeToggle.checked = applied.forceTranscode === true;
                 if (forceVideoTranscodeToggle) forceVideoTranscodeToggle.checked = applied.forceVideoTranscode === true;
@@ -702,6 +989,9 @@ async loadHardwareInfo() {
         // Load users when switching to users tab
         if (tabName === 'users') {
             this.loadUsers();
+            this.startDiscordBotStatusPolling();
+        } else {
+            this.stopDiscordBotStatusPolling();
         }
 
         // Load hardware info when switching to transcode tab
@@ -711,12 +1001,6 @@ async loadHardwareInfo() {
     }
 
     async show() {
-        // Show users tab for admin, hide for non-admin.
-        const usersTab = document.getElementById('users-tab');
-        if (usersTab) {
-            usersTab.style.display = (this.app.currentUser && this.app.currentUser.role === 'admin') ? 'block' : 'none';
-        }
-
         // Load sources when page is shown
         await this.app.sourceManager.loadSources();
         await this.loadAccountSettings();
@@ -767,6 +1051,11 @@ async loadHardwareInfo() {
 
         // Update EPG last refreshed display
         this.updateEpgLastRefreshed();
+
+        if (document.getElementById('tab-users')?.classList.contains('active')) {
+            this.startDiscordBotStatusPolling();
+            this.loadUsers();
+        }
     }
 
     /**
@@ -838,7 +1127,7 @@ async loadHardwareInfo() {
     }
 
     hide() {
-        // Page is hidden
+        this.stopDiscordBotStatusPolling();
     }
 }
 

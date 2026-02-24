@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../auth');
+const crypto = require('crypto');
 
 // Configure Passport strategies
 auth.configureLocalStrategy(
@@ -25,17 +26,239 @@ auth.configureOidcStrategy(
     async (userData) => await db.users.create(userData)
 );
 
+function requireOidcEnabled(req, res, next) {
+    if (!auth.isOidcEnabled()) {
+        return res.status(503).json({ error: 'SSO is not configured on this server' });
+    }
+    next();
+}
+
+function isDiscordOauthEnabled() {
+    return Boolean(
+        process.env.DISCORD_OAUTH_CLIENT_ID &&
+        process.env.DISCORD_OAUTH_CLIENT_SECRET &&
+        process.env.DISCORD_OAUTH_REDIRECT_URI
+    );
+}
+
+function getDiscordOauthScopes() {
+    return process.env.DISCORD_OAUTH_SCOPES || 'identify email';
+}
+
+function requireDiscordOauthEnabled(req, res, next) {
+    if (!isDiscordOauthEnabled()) {
+        return res.status(503).json({ error: 'Discord OAuth is not configured on this server' });
+    }
+    next();
+}
+
+function getDiscordAdminRoleId() {
+    return String(process.env.DISCORD_ADMIN_ROLE_ID || '1356477545989799990').trim();
+}
+
+function getDiscordGuildId() {
+    return String(
+        process.env.DISCORD_GUILD_ID ||
+        process.env.DISCORD_SERVER_ID ||
+        '1356477545964372048'
+    ).trim();
+}
+
+function getDiscordBotToken() {
+    return String(process.env.DISCORD_BOT_TOKEN || '').trim();
+}
+
+function canCheckDiscordGuildMembership() {
+    return Boolean(getDiscordGuildId() && getDiscordBotToken());
+}
+
+function getDiscordAuthBaseUrl() {
+    return 'https://discord.com/api/oauth2/authorize';
+}
+
+function buildDiscordOauthUrl(state) {
+    const params = new URLSearchParams({
+        client_id: process.env.DISCORD_OAUTH_CLIENT_ID,
+        redirect_uri: process.env.DISCORD_OAUTH_REDIRECT_URI,
+        response_type: 'code',
+        scope: getDiscordOauthScopes(),
+        state,
+        prompt: 'consent'
+    });
+    return `${getDiscordAuthBaseUrl()}?${params.toString()}`;
+}
+
+async function exchangeDiscordCodeForToken(code) {
+    const params = new URLSearchParams({
+        client_id: process.env.DISCORD_OAUTH_CLIENT_ID,
+        client_secret: process.env.DISCORD_OAUTH_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: process.env.DISCORD_OAUTH_REDIRECT_URI
+    });
+
+    const response = await fetch('https://discord.com/api/oauth2/token', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: params.toString()
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.access_token) {
+        throw new Error(data?.error_description || data?.error || 'Discord token exchange failed');
+    }
+
+    return data.access_token;
+}
+
+async function fetchDiscordUser(accessToken) {
+    const response = await fetch('https://discord.com/api/users/@me', {
+        headers: {
+            Authorization: `Bearer ${accessToken}`
+        }
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.id) {
+        throw new Error(data?.message || 'Failed to fetch Discord profile');
+    }
+
+    return data;
+}
+
+function buildDiscordAvatarUrl(discordUser) {
+    const userId = String(discordUser?.id || '').trim();
+    const avatar = String(discordUser?.avatar || '').trim();
+    if (!userId || !avatar) return '';
+    const ext = avatar.startsWith('a_') ? 'gif' : 'png';
+    return `https://cdn.discordapp.com/avatars/${userId}/${avatar}.${ext}?size=128`;
+}
+
+async function fetchDiscordGuildMember(discordUserId) {
+    const guildId = getDiscordGuildId();
+    const botToken = getDiscordBotToken();
+
+    if (!guildId || !botToken || !discordUserId) {
+        return null;
+    }
+
+    const response = await fetch(`https://discord.com/api/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(discordUserId)}`, {
+        headers: {
+            Authorization: `Bot ${botToken}`
+        }
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.user?.id) {
+        return null;
+    }
+    return data;
+}
+
+async function hasDiscordAdminRole(discordUserId) {
+    if (!canCheckDiscordGuildMembership()) return false;
+    const adminRoleId = getDiscordAdminRoleId();
+    if (!discordUserId || !adminRoleId) return false;
+
+    const member = await fetchDiscordGuildMember(discordUserId);
+    if (!member || !Array.isArray(member.roles)) return false;
+
+    return member.roles.some(roleId => String(roleId) === adminRoleId);
+}
+
+async function getDiscordMemberStatus(discordUserId) {
+    if (!discordUserId) return 'not_linked';
+    if (!canCheckDiscordGuildMembership()) return 'unknown';
+    const member = await fetchDiscordGuildMember(discordUserId);
+    return member ? 'in_server' : 'not_in_server';
+}
+
+async function isDashboardAdminUser(user) {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    if (!user.discordId) return false;
+    return hasDiscordAdminRole(user.discordId);
+}
+
+async function requireDashboardAdmin(req, res, next) {
+    try {
+        const user = await db.users.getById(req.user?.id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const allowed = await isDashboardAdminUser(user);
+        if (!allowed) {
+            return res.status(403).json({ error: 'Forbidden - Admin access required' });
+        }
+        next();
+    } catch (err) {
+        console.error('Dashboard admin authorization failed:', err);
+        return res.status(500).json({ error: 'Authorization check failed' });
+    }
+}
+
+async function sendDiscordLinkSuccessDm(discordUserId, lurkedTvUsername) {
+    const botToken = getDiscordBotToken();
+    if (!botToken || !discordUserId) return false;
+
+    try {
+        const dmChannelResponse = await fetch('https://discord.com/api/users/@me/channels', {
+            method: 'POST',
+            headers: {
+                Authorization: `Bot ${botToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ recipient_id: String(discordUserId) })
+        });
+
+        const dmChannel = await dmChannelResponse.json().catch(() => ({}));
+        if (!dmChannelResponse.ok || !dmChannel?.id) return false;
+
+        const messageLines = [
+            'Your Discord account is now linked to LurkedTV.',
+            '',
+            `Account: ${lurkedTvUsername || 'Unknown user'}`,
+            '',
+            'You can now use bot commands:',
+            '• !download',
+            '• !status',
+            '• !recent',
+            '• !help'
+        ];
+
+        const messageResponse = await fetch(`https://discord.com/api/channels/${encodeURIComponent(dmChannel.id)}/messages`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bot ${botToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                content: messageLines.join('\n')
+            })
+        });
+
+        return messageResponse.ok;
+    } catch (err) {
+        console.warn('Failed to send Discord link success DM:', err.message);
+        return false;
+    }
+}
+
 /**
  * Start OIDC Login
  * GET /api/auth/oidc/login
  */
-router.get('/oidc/login', auth.passport.authenticate('openidconnect'));
+router.get('/oidc/login', requireOidcEnabled, auth.passport.authenticate('openidconnect'));
 
 /**
  * OIDC Callback
  * GET /api/auth/oidc/callback
  */
 router.get('/oidc/callback',
+    requireOidcEnabled,
     auth.passport.authenticate('openidconnect', { session: false, failureRedirect: '/login.html?error=SSO+Failed' }),
     (req, res) => {
         // Successful authentication
@@ -45,6 +268,146 @@ router.get('/oidc/callback',
         res.redirect(`/?token=${token}`);
     }
 );
+
+/**
+ * Start Discord OAuth Login
+ * GET /api/auth/discord/login
+ */
+router.get('/discord/login', requireDiscordOauthEnabled, (req, res) => {
+    return res.status(410).json({
+        error: 'Discord sign-in is disabled. Sign in with Firebase, then link Discord from Settings.'
+    });
+});
+
+/**
+ * Start Discord linking for authenticated Firebase user
+ * POST /api/auth/discord/link/start
+ */
+router.post('/discord/link/start', auth.requireAuth, requireDiscordOauthEnabled, async (req, res) => {
+    try {
+        const user = await db.users.getById(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const state = crypto.randomBytes(24).toString('hex');
+        req.session.discordLinkState = {
+            state,
+            userId: user.id,
+            createdAt: Date.now()
+        };
+
+        return res.json({ url: buildDiscordOauthUrl(state) });
+    } catch (err) {
+        console.error('Discord link init failed:', err);
+        return res.status(500).json({ error: err.message || 'Failed to start Discord link flow' });
+    }
+});
+
+/**
+ * Remove linked Discord account from current user
+ * DELETE /api/auth/discord/link
+ */
+router.delete('/discord/link', auth.requireAuth, async (req, res) => {
+    try {
+        const user = await db.users.getById(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        await db.users.update(user.id, {
+            discordId: null,
+            discordUsername: null,
+            discordDisplayName: null,
+            discordAvatarUrl: null,
+            discordMemberStatus: null
+        });
+        return res.json({ success: true });
+    } catch (err) {
+        console.error('Discord unlink failed:', err);
+        return res.status(500).json({ error: err.message || 'Failed to unlink Discord account' });
+    }
+});
+
+/**
+ * Discord OAuth Callback
+ * GET /api/auth/discord/callback
+ */
+router.get('/discord/callback', requireDiscordOauthEnabled, async (req, res) => {
+    try {
+        const { code, state } = req.query;
+        const linkState = req.session.discordLinkState;
+
+        if (!linkState || !code || !state || state !== linkState.state) {
+            return res.redirect('/login.html?error=Discord+link+session+is+invalid+or+expired');
+        }
+        delete req.session.discordLinkState;
+
+        const discordAccessToken = await exchangeDiscordCodeForToken(String(code));
+        const discordUser = await fetchDiscordUser(discordAccessToken);
+        const linkUser = await db.users.getById(linkState.userId);
+        if (!linkUser) {
+            return res.redirect('/?discord=link_failed_user_not_found#settings');
+        }
+
+        const existing = await db.users.getByDiscordId(discordUser.id);
+        if (existing && Number(existing.id) !== Number(linkUser.id)) {
+            return res.redirect('/?discord=already_linked#settings');
+        }
+
+        await db.users.update(linkUser.id, {
+            discordId: discordUser.id,
+            discordUsername: discordUser.username || null,
+            discordDisplayName: discordUser.global_name || discordUser.username || null,
+            discordAvatarUrl: buildDiscordAvatarUrl(discordUser) || null,
+            discordMemberStatus: await getDiscordMemberStatus(discordUser.id)
+        });
+
+        await sendDiscordLinkSuccessDm(discordUser.id, linkUser.username);
+        res.redirect('/?discord=linked#settings');
+    } catch (err) {
+        console.error('Discord OAuth callback failed:', err);
+        res.redirect('/?discord=link_failed#settings');
+    }
+});
+
+/**
+ * Exchange linked Discord user ID for LurkedTV JWT (bot-only)
+ * POST /api/auth/discord/bot-token
+ */
+router.post('/discord/bot-token', async (req, res) => {
+    try {
+        const expectedSecret = process.env.DISCORD_BOT_AUTH_SECRET || '';
+        if (!expectedSecret) {
+            return res.status(503).json({ error: 'DISCORD_BOT_AUTH_SECRET is not configured' });
+        }
+
+        const providedSecret = String(req.headers['x-bot-auth'] || '');
+        if (!providedSecret || providedSecret !== expectedSecret) {
+            return res.status(401).json({ error: 'Invalid bot auth secret' });
+        }
+
+        const discordId = String(req.body?.discordId || '').trim();
+        if (!discordId) {
+            return res.status(400).json({ error: 'discordId is required' });
+        }
+
+        const user = await db.users.getByDiscordId(discordId);
+        if (!user) {
+            return res.status(404).json({ error: 'Discord account is not linked to a LurkedTV user' });
+        }
+
+        const token = auth.generateToken(user);
+        return res.json({
+            token,
+            user: {
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                email: user.email || null
+            }
+        });
+    } catch (err) {
+        console.error('Discord bot token exchange failed:', err);
+        res.status(500).json({ error: err.message || 'Failed to exchange Discord identity' });
+    }
+});
 
 /**
  * Check if initial setup is required
@@ -78,6 +441,32 @@ router.post('/login', (req, res) => {
     return res.status(410).json({
         error: 'Username/password login is disabled. Use Firebase authentication.'
     });
+});
+
+/**
+ * Check whether current user qualifies for admin dashboard access using Discord role
+ * GET /api/auth/discord/admin-status
+ */
+router.get('/discord/admin-status', auth.requireAuth, async (req, res) => {
+    try {
+        const user = await db.users.getById(req.user.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const hasRole = await hasDiscordAdminRole(user.discordId);
+        const isAdmin = user.role === 'admin' || hasRole;
+
+        return res.json({
+            isAdmin,
+            source: user.role === 'admin' ? 'nodecast-role' : (hasRole ? 'discord-role' : 'none'),
+            discordLinked: !!user.discordId,
+            discordRoleVerified: hasRole,
+            membershipCheckAvailable: canCheckDiscordGuildMembership(),
+            requiredRoleId: getDiscordAdminRoleId()
+        });
+    } catch (err) {
+        console.error('Discord admin status check failed:', err);
+        return res.status(500).json({ error: err.message || 'Failed to check Discord admin status' });
+    }
 });
 
 /**
@@ -170,13 +559,29 @@ router.get('/me', auth.requireAuth, async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
 
+        let liveDiscordMemberStatus = user.discordMemberStatus || null;
+        if (user.discordId) {
+            liveDiscordMemberStatus = await getDiscordMemberStatus(user.discordId);
+            if (liveDiscordMemberStatus !== user.discordMemberStatus) {
+                await db.users.update(user.id, { discordMemberStatus: liveDiscordMemberStatus });
+            }
+        }
+
+        const discordAdmin = await isDashboardAdminUser(user);
+
         res.json({
             id: user.id,
             username: user.username,
             role: user.role,
             email: user.email || null,
             defaultLanguage: user.defaultLanguage || '',
-            emailVerified: !!user.firebaseUid
+            emailVerified: !!user.firebaseUid,
+            discordLinked: !!user.discordId,
+            discordAdmin,
+            discordUsername: user.discordUsername || null,
+            discordDisplayName: user.discordDisplayName || null,
+            discordAvatarUrl: user.discordAvatarUrl || null,
+            discordMemberStatus: liveDiscordMemberStatus
         });
     } catch (err) {
         console.error('Error in /me:', err);
@@ -203,13 +608,21 @@ router.patch('/me/preferences', auth.requireAuth, async (req, res) => {
 
         const user = await db.users.update(req.user.id, updates);
 
+        const discordAdmin = await isDashboardAdminUser(user);
+
         res.json({
             id: user.id,
             username: user.username,
             role: user.role,
             email: user.email || null,
             defaultLanguage: user.defaultLanguage || '',
-            emailVerified: !!user.firebaseUid
+            emailVerified: !!user.firebaseUid,
+            discordLinked: !!user.discordId,
+            discordAdmin,
+            discordUsername: user.discordUsername || null,
+            discordDisplayName: user.discordDisplayName || null,
+            discordAvatarUrl: user.discordAvatarUrl || null,
+            discordMemberStatus: user.discordMemberStatus || null
         });
     } catch (err) {
         console.error('Error updating preferences:', err);
@@ -274,7 +687,7 @@ router.post('/me/change-password', auth.requireAuth, async (req, res) => {
  * Get all users (admin only)
  * GET /api/auth/users
  */
-router.get('/users', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+router.get('/users', auth.requireAuth, requireDashboardAdmin, async (req, res) => {
     try {
         const allUsers = await db.users.getAll();
 
@@ -295,7 +708,7 @@ router.get('/users', auth.requireAuth, auth.requireAdmin, async (req, res) => {
  * Create a new user (admin only)
  * POST /api/auth/users
  */
-router.post('/users', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+router.post('/users', auth.requireAuth, requireDashboardAdmin, async (req, res) => {
     try {
         const { username, password, role } = req.body;
 
@@ -329,7 +742,7 @@ router.post('/users', auth.requireAuth, auth.requireAdmin, async (req, res) => {
  * Update a user (admin only)
  * PUT /api/auth/users/:id
  */
-router.put('/users/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+router.put('/users/:id', auth.requireAuth, requireDashboardAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { username, password, role } = req.body;
@@ -377,7 +790,7 @@ router.put('/users/:id', auth.requireAuth, auth.requireAdmin, async (req, res) =
  * Delete a user (admin only)
  * DELETE /api/auth/users/:id
  */
-router.delete('/users/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+router.delete('/users/:id', auth.requireAuth, requireDashboardAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 

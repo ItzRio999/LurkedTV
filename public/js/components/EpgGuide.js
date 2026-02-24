@@ -623,11 +623,11 @@ class EpgGuide {
             // Name/Logo click plays channel
             info.querySelector('.epg-channel-name')?.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.playChannel(info.querySelector('.epg-channel-name').textContent);
+                this.playChannel(row.dataset.channelId, row.dataset.sourceId);
             });
             info.querySelector('.epg-channel-logo')?.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.playChannel(info.querySelector('.epg-channel-name').textContent);
+                this.playChannel(row.dataset.channelId, row.dataset.sourceId);
             });
 
             // Favorite click
@@ -912,18 +912,23 @@ class EpgGuide {
     /**
      * Play channel from EPG
      */
-    async playChannel(channelName) {
-        // Find channel in channel list and play
-        if (window.app?.channelList) {
-            const channel = window.app.channelList.channels.find(c =>
-                c.name === channelName || c.tvgName === channelName
-            );
-            if (channel) {
-                await window.app.channelList.selectChannel({ channelId: channel.id });
-                // Switch to live TV page
-                document.querySelector('[data-page="live"]').click();
-            }
-        }
+    async playChannel(channelId, sourceId) {
+        if (!window.app?.channelList) return;
+
+        const channel = window.app.channelList.channels.find(c =>
+            String(c.id) === String(channelId) && String(c.sourceId) === String(sourceId)
+        );
+        if (!channel) return;
+
+        await window.app.channelList.selectChannel({
+            channelId: channel.id,
+            sourceId: channel.sourceId
+        });
+
+        // If user clicked from merged EPG view, return to the player/channel layout.
+        const liveToggle = document.getElementById('live-epg-toggle');
+        if (liveToggle) liveToggle.checked = false;
+        await window.app.pages?.live?.setEpgMode?.(false);
     }
 }
 

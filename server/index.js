@@ -1,6 +1,7 @@
 const express = require('express');
 require('dotenv').config({ quiet: true });
 const path = require('path');
+const fs = require('fs');
 const passport = require('passport');
 const syncService = require('./services/syncService');
 const firebaseCacheSync = require('./services/firebaseCacheSync');
@@ -123,7 +124,6 @@ app.locals.ffmpegPath = findFFmpeg();
 app.locals.ffprobePath = findFFprobe();
 
 // Dynamic services loader - collects exports from files in ./services
-const fs = require('fs');
 const services = {};
 try {
     const servicesDir = path.join(__dirname, 'services');
