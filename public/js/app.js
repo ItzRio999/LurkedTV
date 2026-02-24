@@ -13,6 +13,8 @@ class App {
         this.globalLoadingCount = 0;
         this.premiumGatePopupEl = document.getElementById('premium-gate-popup');
         this.premiumGateTextEl = document.getElementById('premium-gate-text');
+        this.masterReloadConfirmPopupEl = document.getElementById('master-reload-confirm-popup');
+        this.masterReloadConfirmResolver = null;
         this.masterReloadInProgress = false;
 
         // Initialize components
@@ -134,6 +136,7 @@ class App {
         this.setupGlobalSearch();
         this.setupMasterReloadButtons();
         this.setupPremiumGatePopup();
+        this.setupMasterReloadConfirmPopup();
 
         // Toggle groups button
         document.getElementById('toggle-groups').addEventListener('click', () => {
@@ -523,7 +526,8 @@ class App {
             return;
         }
 
-        if (!confirm('Reload all enabled sources now? This may take a while.')) {
+        const confirmed = await this.showMasterReloadConfirmPopup();
+        if (!confirmed) {
             return;
         }
 
@@ -563,6 +567,44 @@ class App {
 
     hidePremiumGatePopup() {
         this.premiumGatePopupEl?.classList.add('hidden');
+    }
+
+    setupMasterReloadConfirmPopup() {
+        const cancelBtn = document.getElementById('master-reload-cancel-btn');
+        const confirmBtn = document.getElementById('master-reload-confirm-btn');
+
+        cancelBtn?.addEventListener('click', () => this.resolveMasterReloadConfirm(false));
+        confirmBtn?.addEventListener('click', () => this.resolveMasterReloadConfirm(true));
+
+        this.masterReloadConfirmPopupEl?.addEventListener('click', (e) => {
+            if (e.target === this.masterReloadConfirmPopupEl) {
+                this.resolveMasterReloadConfirm(false);
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (this.masterReloadConfirmPopupEl && !this.masterReloadConfirmPopupEl.classList.contains('hidden')) {
+                    this.resolveMasterReloadConfirm(false);
+                }
+            }
+        });
+    }
+
+    showMasterReloadConfirmPopup() {
+        return new Promise((resolve) => {
+            this.masterReloadConfirmResolver = resolve;
+            this.masterReloadConfirmPopupEl?.classList.remove('hidden');
+        });
+    }
+
+    resolveMasterReloadConfirm(result) {
+        if (typeof this.masterReloadConfirmResolver === 'function') {
+            const resolver = this.masterReloadConfirmResolver;
+            this.masterReloadConfirmResolver = null;
+            this.masterReloadConfirmPopupEl?.classList.add('hidden');
+            resolver(result === true);
+        }
     }
 
     setupGlobalSearch() {

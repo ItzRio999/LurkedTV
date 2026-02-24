@@ -8,7 +8,11 @@ class SettingsPage {
         this.tabs = document.querySelectorAll('.tabs .tab');
         this.tabContents = document.querySelectorAll('.tab-content');
         this.discordBotStatusTimer = null;
+        this.settingsRealtimeTimer = null;
+        this.settingsRealtimeInFlight = false;
         this.discordBotConfigLoaded = false;
+        this.lastUserListHash = '';
+        this.lastPremiumUserListHash = '';
 
         this.init();
     }
@@ -200,13 +204,48 @@ class SettingsPage {
         this.loadDiscordBotStatus();
         this.discordBotStatusTimer = setInterval(() => {
             this.loadDiscordBotStatus();
-        }, 15000);
+        }, 8000);
     }
 
     stopDiscordBotStatusPolling() {
         if (this.discordBotStatusTimer) {
             clearInterval(this.discordBotStatusTimer);
             this.discordBotStatusTimer = null;
+        }
+    }
+
+    startSettingsRealtimeRefresh() {
+        this.stopSettingsRealtimeRefresh();
+        this.runSettingsRealtimeRefresh();
+        this.settingsRealtimeTimer = setInterval(() => {
+            this.runSettingsRealtimeRefresh();
+        }, 8000);
+    }
+
+    stopSettingsRealtimeRefresh() {
+        if (this.settingsRealtimeTimer) {
+            clearInterval(this.settingsRealtimeTimer);
+            this.settingsRealtimeTimer = null;
+        }
+    }
+
+    async runSettingsRealtimeRefresh() {
+        if (this.settingsRealtimeInFlight || this.app?.currentPage !== 'settings') return;
+        this.settingsRealtimeInFlight = true;
+        try {
+            await this.updateEpgLastRefreshed();
+
+            const usersTabActive = document.getElementById('tab-users')?.classList.contains('active');
+            if (usersTabActive) {
+                await Promise.all([
+                    this.loadDiscordBotStatus(),
+                    this.loadUsers({ quiet: true })
+                ]);
+            }
+        } catch (err) {
+            console.warn('[Settings] Background refresh failed:', err?.message || err);
+        } finally {
+            this.settingsRealtimeInFlight = false;
         }
     }
 
@@ -875,7 +914,8 @@ async loadHardwareInfo() {
         });
     }
 
-    async loadUsers() {
+    async loadUsers(options = {}) {
+        const quiet = options.quiet === true;
         const userList = document.getElementById('user-list');
         const premiumUserList = document.getElementById('premium-user-list');
         if (!userList) return;
@@ -884,6 +924,29 @@ async loadHardwareInfo() {
             const users = await API.users.getAll();
             // Store users in memory for easy access during edit
             this.users = users;
+
+            const compactUsers = users.map(user => ({
+                id: user.id,
+                username: user.username || '',
+                email: user.email || '',
+                role: user.role || '',
+                premium: user.premium === true,
+                createdAt: user.createdAt || '',
+                oidcId: user.oidcId || ''
+            }));
+            const userListHash = JSON.stringify(compactUsers);
+            const premiumListHash = JSON.stringify(compactUsers.map(u => ({
+                id: u.id,
+                username: u.username,
+                email: u.email,
+                premium: u.premium
+            })));
+
+            if (quiet && this.lastUserListHash === userListHash && this.lastPremiumUserListHash === premiumListHash) {
+                return;
+            }
+            this.lastUserListHash = userListHash;
+            this.lastPremiumUserListHash = premiumListHash;
 
             if (users.length === 0) {
                 userList.innerHTML = '<tr><td colspan="6" class="hint">No users found</td></tr>';
@@ -945,8 +1008,10 @@ async loadHardwareInfo() {
             }
         } catch (err) {
             console.error('Error loading users:', err);
-            userList.innerHTML = '<tr><td colspan="6" class="hint">Error loading users</td></tr>';
-            if (premiumUserList) premiumUserList.innerHTML = '<tr><td colspan="4" class="hint">Error loading users</td></tr>';
+            if (!quiet) {
+                userList.innerHTML = '<tr><td colspan="6" class="hint">Error loading users</td></tr>';
+                if (premiumUserList) premiumUserList.innerHTML = '<tr><td colspan="4" class="hint">Error loading users</td></tr>';
+            }
         }
     }
 
@@ -1112,9 +1177,7 @@ async loadHardwareInfo() {
                 () => this.loadUsers(),
                 'Loading users...'
             );
-            this.startDiscordBotStatusPolling();
-        } else {
-            this.stopDiscordBotStatusPolling();
+            this.loadDiscordBotStatus();
         }
 
         // Load hardware info when switching to transcode tab
@@ -1130,6 +1193,7 @@ async loadHardwareInfo() {
         // Load sources when page is shown
         await this.app.sourceManager.loadSources();
         await this.loadAccountSettings();
+        this.startSettingsRealtimeRefresh();
 
         // Refresh ALL player settings from server
         if (this.app.player?.settings) {
@@ -1179,7 +1243,7 @@ async loadHardwareInfo() {
         this.updateEpgLastRefreshed();
 
         if (document.getElementById('tab-users')?.classList.contains('active')) {
-            this.startDiscordBotStatusPolling();
+            this.loadDiscordBotStatus();
             this.app.withGlobalLoading(
                 () => this.loadUsers(),
                 'Loading users...'
@@ -1257,7 +1321,7 @@ async loadHardwareInfo() {
     }
 
     hide() {
-        this.stopDiscordBotStatusPolling();
+        this.stopSettingsRealtimeRefresh();
     }
 }
 

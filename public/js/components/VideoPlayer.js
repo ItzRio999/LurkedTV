@@ -483,7 +483,9 @@ class VideoPlayer {
      */
     copyStreamUrl() {
         if (!window.app?.currentUser?.premium) {
-            alert('Premium required: Copy Stream URL is a premium feature.');
+            if (typeof window.app?.showPremiumGatePopup === 'function') {
+                window.app.showPremiumGatePopup('Copy Stream URL is a premium feature.');
+            }
             return;
         }
 

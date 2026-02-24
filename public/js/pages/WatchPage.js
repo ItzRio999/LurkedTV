@@ -1061,7 +1061,9 @@ class WatchPage {
      */
     copyStreamUrl() {
         if (!this.app?.currentUser?.premium) {
-            alert('Premium required: Copy Stream URL is a premium feature.');
+            if (typeof this.app?.showPremiumGatePopup === 'function') {
+                this.app.showPremiumGatePopup('Copy Stream URL is a premium feature.');
+            }
             return;
         }
 
