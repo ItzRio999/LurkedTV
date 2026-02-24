@@ -1,0 +1,103 @@
+NODECAST-TV REQUIREMENTS (ALL)
+=================================
+
+1) Core Requirements (required)
+- Node.js 18.0.0 or newer (project engine: >=18)
+- npm (comes with Node.js)
+- Internet access for provider APIs/streams and dependency install
+- Write access to project folders (especially /data and /transcode-cache)
+
+2) Node Dependencies (required)
+Install from package.json:
+- Production deps: @ffprobe-installer/ffprobe, bcryptjs, better-sqlite3, discord.js, dotenv, express, express-session, firebase, firebase-admin, jsonwebtoken, passport, passport-jwt, passport-local, passport-openidconnect, sax, xml2js
+- Optional dep: ffmpeg-static (fallback FFmpeg binary)
+- Dev deps (for local frontend dev): concurrently, vite
+
+Install command:
+- npm install
+
+3) Runtime Binaries / System Packages
+- FFmpeg binary (recommended for transcoding/remux/subtitle processing)
+  - If system ffmpeg is missing, app tries ffmpeg-static npm package
+- FFprobe binary (recommended for stream probing)
+  - App can use @ffprobe-installer/ffprobe fallback
+- better-sqlite3 native module support
+  - Windows: Visual Studio Build Tools may be needed if no prebuilt binary is available
+  - Linux: python3, make, g++ may be needed for native builds
+
+4) Environment Variables
+A) Minimum to run server (required)
+- None strictly required due defaults, but strongly recommended:
+  - JWT_SECRET=<your-strong-secret>
+  - PORT=3000 (or your port)
+  - NODE_ENV=development or production
+
+B) Required for Firebase email/password auth flow
+- FIREBASE_API_KEY=<firebase web api key>
+- FIREBASE_PROJECT_ID=<firebase project id>
+
+C) Required for Firebase Admin media cache sync feature
+- FIREBASE_CLIENT_EMAIL=<service account client email>
+- FIREBASE_PRIVATE_KEY=<service account private key, with newlines escaped as \n>
+- FIREBASE_PROJECT_ID=<firebase project id>
+
+D) Required for OIDC SSO feature
+- OIDC_ISSUER_URL=
+- OIDC_CLIENT_ID=
+- OIDC_CLIENT_SECRET=
+Optional overrides:
+- OIDC_AUTH_URL=
+- OIDC_TOKEN_URL=
+- OIDC_USERINFO_URL=
+- OIDC_CALLBACK_URL=
+
+E) Required for Discord OAuth account linking feature
+- DISCORD_OAUTH_CLIENT_ID=
+- DISCORD_OAUTH_CLIENT_SECRET=
+- DISCORD_OAUTH_REDIRECT_URI=
+Recommended:
+- DISCORD_OAUTH_SCOPES=identify email
+- DISCORD_GUILD_ID=
+- DISCORD_ADMIN_ROLE_ID=
+- DISCORD_BOT_TOKEN= (needed for guild role checks/DM/audit endpoints)
+- DISCORD_BOT_AUTH_SECRET= (required by /api/auth/discord/bot-token endpoint)
+
+F) Required for Discord bot script (scripts/discord-bot.js)
+- DISCORD_BOT_TOKEN=
+- NODECAST_API_BASE_URL=http://localhost:3000 (or deployed URL)
+- NODECAST_DISCORD_AUTH_SECRET= (if using /api/auth/discord/bot-token)
+Optional bot vars:
+- DISCORD_BOT_PREFIX=!
+- NODECAST_API_TOKEN=
+- DISCORD_USER_TOKEN_MAP={}
+- NODECAST_EMAIL=
+- NODECAST_PASSWORD=
+- FIREBASE_API_KEY=
+- NODECAST_ACTIVE_WINDOW_MS=300000
+- DISCORD_COMMAND_DEDUPE_WINDOW_MS=15000
+- DISCORD_GUILD_ID=
+- DISCORD_SERVER_ID=
+
+5) Data/Filesystem Expectations
+- /data directory (auto-created)
+- /data/db.json and /data/content.db are created/used by app
+- /transcode-cache directory used for HLS segment caching
+
+6) Start Commands
+- Development (API + Vite): npm run dev
+- Production-style local run: npm run start
+- Build frontend bundle: npm run build
+- Discord bot: npm run bot:discord
+
+7) Docker Requirements (if running in container)
+- Docker + Docker Compose
+- Host port 3000 open (or mapped alternative)
+- Mount persistent volume for /app/data
+- For hardware accel (optional):
+  - VAAPI/QSV: /dev/dri passthrough and proper groups
+  - NVIDIA NVENC: nvidia-container-toolkit + --gpus
+
+8) Security/Production Notes
+- Change JWT_SECRET in production
+- Do not commit real .env secrets
+- Keep Node and dependencies updated
