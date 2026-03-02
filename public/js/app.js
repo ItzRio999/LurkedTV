@@ -339,8 +339,9 @@ class App {
 
             this.currentUser = await response.json();
 
-            // Wire up profile dropdown
+            // Wire up profile dropdown and apply avatar immediately
             this.initProfileDropdown();
+            this.updateNavbarProfileVisuals(this.currentUser);
 
         } catch (err) {
             console.error('Authentication error:', err);

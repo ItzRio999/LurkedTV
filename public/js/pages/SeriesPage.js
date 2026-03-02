@@ -802,7 +802,7 @@ class SeriesPage {
 
     async loadSeries() {
         this.isLoading = true;
-        this.container.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+        this.container.innerHTML = '<div class="loading-state"><div class="loading"></div></div>';
 
         try {
             this.seriesList = [];
@@ -908,7 +908,7 @@ class SeriesPage {
         // Create loader element
         const loader = document.createElement('div');
         loader.className = 'series-loader';
-        loader.innerHTML = '<div class="loading-spinner"></div>';
+        loader.innerHTML = '<div class="loading"></div>';
         this.container.appendChild(loader);
 
         // Render initial batches
@@ -1060,7 +1060,7 @@ class SeriesPage {
         }
 
         // Show loading
-        this.seasonsContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+        this.seasonsContainer.innerHTML = '<div class="loading-state"><div class="loading"></div></div>';
 
         try {
             // Fetch series info (seasons/episodes)

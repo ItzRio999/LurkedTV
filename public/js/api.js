@@ -394,7 +394,7 @@
       return { s: 200, d: { started: true, message: 'Static sync completed.' } };
     }
     if (p === '/settings/auto-profile/apply' && method === 'POST') return { s: 200, d: { success: true } };
-    if (p === '/settings/discord-bot/status' && method === 'GET') return { s: 200, d: { config: { prefix: '!', guildId: '', adminRoleId: '', logChannelId: '' }, monitor: { heartbeat: { online: false, ageMs: 0 }, botIdentity: { ok: false }, guildStatus: { ok: false }, roleStatus: { ok: false } } } };
+    if (p === '/settings/discord-bot/status' && method === 'GET') return { s: 200, d: { config: { prefix: '!', guildId: '', adminRoleId: '', logChannelId: '', activeWindowMs: 300000, commandDedupeWindowMs: 15000, rpcText: 'Watching LurkedTV', rpcType: 'watching', botStatus: 'online' }, monitor: { heartbeat: { online: false, ageMs: 0 }, botIdentity: { ok: false }, guildStatus: { ok: false }, roleStatus: { ok: false } } } };
     if (p === '/settings/discord-bot/config' && method === 'PUT') return { s: 200, d: { success: true } };
     if (p === '/settings/hw-info' && method === 'GET') return { s: 200, d: { cpu: { available: true, model: navigator.platform || 'CPU', physicalCores: navigator.hardwareConcurrency || 4, logicalThreads: navigator.hardwareConcurrency || 4, recommendedThreads: Math.max(2, Math.floor((navigator.hardwareConcurrency || 4) / 2)) }, nvidia: { available: false }, amf: { available: false }, qsv: { available: false }, vaapi: { available: false }, hags: { supported: /^Win/i.test(navigator.platform || ''), enabled: null, reason: 'Static mode cannot detect OS HAGS state' }, recommended: 'software', recommendedPipeline: 'software' } };
 

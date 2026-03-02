@@ -405,7 +405,7 @@ class ChannelList {
         // Add loader element at bottom
         this.loader = document.createElement('div');
         this.loader.className = 'batch-loader';
-        this.loader.innerHTML = '<div class="loading-spinner"></div>';
+        this.loader.innerHTML = '<div class="loading"></div>';
         this.loader.style.opacity = '0'; // Hide initially
         this.container.appendChild(this.loader);
 

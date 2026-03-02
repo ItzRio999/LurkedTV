@@ -895,7 +895,7 @@ class MoviesPage {
 
     async loadMovies() {
         this.isLoading = true;
-        this.container.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+        this.container.innerHTML = '<div class="loading-state"><div class="loading"></div></div>';
 
         try {
             this.movies = [];

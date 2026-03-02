@@ -37,6 +37,16 @@ function toSafeInt(value, fallback) {
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
+function normalizeDiscordRpcType(value, fallback = 'watching') {
+    const t = String(value || '').trim().toLowerCase();
+    return ['playing', 'listening', 'watching', 'competing', 'streaming'].includes(t) ? t : fallback;
+}
+
+function normalizeDiscordPresenceStatus(value, fallback = 'online') {
+    const s = String(value || '').trim().toLowerCase();
+    return ['online', 'idle', 'dnd', 'invisible'].includes(s) ? s : fallback;
+}
+
 function normalizeUpscaleMethod(settingsObj = {}) {
     const normalized = String(settingsObj?.upscaleMethod || '').toLowerCase();
     if (!normalized || normalized === 'hardware' || normalized === 'software') {
@@ -56,7 +66,11 @@ async function getEffectiveDiscordBotConfig() {
         adminRoleId: toSafeString(s.discordAdminRoleId, process.env.DISCORD_ADMIN_ROLE_ID || '1356477545989799990'),
         logChannelId: toSafeString(s.discordLogChannelId, ''),
         activeWindowMs: toSafeInt(s.discordActiveWindowMs, Number(process.env.NODECAST_ACTIVE_WINDOW_MS || 300000)),
-        commandDedupeWindowMs: toSafeInt(s.discordCommandDedupeWindowMs, Number(process.env.DISCORD_COMMAND_DEDUPE_WINDOW_MS || 15000))
+        commandDedupeWindowMs: toSafeInt(s.discordCommandDedupeWindowMs, Number(process.env.DISCORD_COMMAND_DEDUPE_WINDOW_MS || 15000)),
+        rpcText: toSafeString(s.discordRpcText, process.env.DISCORD_BOT_RPC_TEXT || 'Watching LurkedTV').slice(0, 128),
+        rpcImage: toSafeString(s.discordRpcImage, process.env.DISCORD_BOT_RPC_IMAGE || ''),
+        rpcType: normalizeDiscordRpcType(s.discordRpcType, process.env.DISCORD_BOT_RPC_TYPE || 'watching'),
+        botStatus: normalizeDiscordPresenceStatus(s.discordBotStatus, process.env.DISCORD_BOT_STATUS || 'online')
     };
 }
 
@@ -337,6 +351,10 @@ router.put('/discord-bot/config', auth.requireAuth, auth.requireAdmin, async (re
         if (req.body?.logChannelId !== undefined) updates.discordLogChannelId = toSafeString(req.body.logChannelId, '');
         if (req.body?.activeWindowMs !== undefined) updates.discordActiveWindowMs = toSafeInt(req.body.activeWindowMs, 300000);
         if (req.body?.commandDedupeWindowMs !== undefined) updates.discordCommandDedupeWindowMs = toSafeInt(req.body.commandDedupeWindowMs, 15000);
+        if (req.body?.rpcText !== undefined) updates.discordRpcText = toSafeString(req.body.rpcText, 'Watching LurkedTV').slice(0, 128);
+        if (req.body?.rpcImage !== undefined) updates.discordRpcImage = toSafeString(req.body.rpcImage, '');
+        if (req.body?.rpcType !== undefined) updates.discordRpcType = normalizeDiscordRpcType(req.body.rpcType, 'watching');
+        if (req.body?.botStatus !== undefined) updates.discordBotStatus = normalizeDiscordPresenceStatus(req.body.botStatus, 'online');
 
         if (!Object.keys(updates).length) {
             return res.status(400).json({ error: 'No valid Discord bot config fields provided' });

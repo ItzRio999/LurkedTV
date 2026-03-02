@@ -20,7 +20,6 @@ class VideoPlayer {
 
         this.container = document.querySelector('.video-container');
         this.overlay = document.getElementById('player-overlay');
-        this.nowPlaying = document.getElementById('now-playing');
         this.hls = null;
         this.currentChannel = null;
         this.overlayTimer = null;
@@ -815,12 +814,12 @@ class VideoPlayer {
             clearTimeout(this.overlayTimer);
         }
 
-        // Show overlay
-        this.nowPlaying.classList.remove('hidden');
+        // Show controls overlay
+        this.controlsOverlay?.classList.remove('hidden');
 
         // Hide after duration
         this.overlayTimer = setTimeout(() => {
-            this.nowPlaying.classList.add('hidden');
+            this.controlsOverlay?.classList.add('hidden');
         }, this.settings.overlayDuration * 1000);
     }
 
@@ -831,7 +830,7 @@ class VideoPlayer {
         if (this.overlayTimer) {
             clearTimeout(this.overlayTimer);
         }
-        this.nowPlaying.classList.add('hidden');
+        this.controlsOverlay?.classList.add('hidden');
     }
 
     /**
@@ -1447,7 +1446,6 @@ class VideoPlayer {
         this.overlay.classList.remove('hidden'); // Show "Select a channel"
         this.controlsOverlay?.classList.add('hidden'); // Hide controls
         this.loadingSpinner?.classList.remove('show');
-        this.nowPlaying.classList.add('hidden');
 
         // Hide quality badge
         this.currentStreamInfo = null;
@@ -1459,32 +1457,36 @@ class VideoPlayer {
      * Update now playing display
      */
     updateNowPlaying(channel, epgData = null) {
-        const channelName = this.nowPlaying.querySelector('.channel-name');
-        const programTitle = this.nowPlaying.querySelector('.program-title');
-        const programTime = this.nowPlaying.querySelector('.program-time');
+        const channelName = document.getElementById('player-channel-name');
+        const programTitle = document.getElementById('player-program-title');
+        const programTime = document.getElementById('player-program-time');
         const upNextList = document.getElementById('up-next-list');
 
-        channelName.textContent = channel.name || channel.tvgName || 'Unknown Channel';
+        if (channelName) channelName.textContent = channel.name || channel.tvgName || 'Unknown Channel';
 
         if (epgData && epgData.current) {
-            programTitle.textContent = epgData.current.title;
-            const start = new Date(epgData.current.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const end = new Date(epgData.current.stop).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            programTime.textContent = `${start} - ${end}`;
+            if (programTitle) programTitle.textContent = epgData.current.title;
+            if (programTime) {
+                const start = new Date(epgData.current.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const end = new Date(epgData.current.stop).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                programTime.textContent = `${start} - ${end}`;
+            }
         } else {
-            programTitle.textContent = '';
-            programTime.textContent = '';
+            if (programTitle) programTitle.textContent = '';
+            if (programTime) programTime.textContent = '';
         }
 
         // Update up next
-        upNextList.innerHTML = '';
-        if (epgData && epgData.upcoming) {
-            epgData.upcoming.slice(0, 3).forEach(prog => {
-                const li = document.createElement('li');
-                const time = new Date(prog.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                li.textContent = `${time} - ${prog.title}`;
-                upNextList.appendChild(li);
-            });
+        if (upNextList) {
+            upNextList.innerHTML = '';
+            if (epgData && epgData.upcoming) {
+                epgData.upcoming.slice(0, 3).forEach(prog => {
+                    const li = document.createElement('li');
+                    const time = new Date(prog.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    li.textContent = `${time} - ${prog.title}`;
+                    upNextList.appendChild(li);
+                });
+            }
         }
     }
 
@@ -1557,7 +1559,7 @@ class VideoPlayer {
             case 'i':
                 // Show/hide info overlay
                 e.preventDefault();
-                if (this.nowPlaying.classList.contains('hidden')) {
+                if (this.controlsOverlay?.classList.contains('hidden')) {
                     this.showNowPlayingOverlay();
                 } else {
                     this.hideNowPlayingOverlay();

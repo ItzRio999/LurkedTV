@@ -56,14 +56,13 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// In production (NODE_ENV=production) serve the pre-built dist/ directory.
-// In development the Express server still serves public/ directly; Vite (port 5173)
-// is the recommended dev entry point and proxies /api requests here.
+// Serve the pre-built dist/ directory when it exists (e.g. after npm run build).
+// Falls back to public/ for development without a build.
+// Use Vite (port 5173 via npm run dev) for hot-reload during active development.
 const distDir = path.join(__dirname, '..', 'dist');
 const publicDir = path.join(__dirname, '..', 'public');
-const frontendDir = (isProduction && fs.existsSync(distDir))
-  ? distDir
-  : publicDir;
+const distExists = fs.existsSync(distDir);
+const frontendDir = distExists ? distDir : publicDir;
 
 app.use(express.static(frontendDir, {
     etag: true,

@@ -44,7 +44,7 @@
         .login-orb--1 {
             width: 520px;
             height: 520px;
-            background: radial-gradient(circle, rgba(124, 58, 237, 0.3) 0%, transparent 70%);
+            background: radial-gradient(circle, rgba(132, 116, 245, 0.3) 0%, transparent 70%);
             top: -140px;
             left: -160px;
             animation-delay: 0s;
@@ -90,12 +90,12 @@
             padding: var(--space-2xl);
             border-radius: var(--radius-lg);
             box-shadow:
-                0 0 0 1px rgba(124, 58, 237, 0.16),
+                0 0 0 1px rgba(132, 116, 245, 0.16),
                 0 8px 32px rgba(0, 0, 0, 0.7),
-                0 0 60px rgba(124, 58, 237, 0.07);
+                0 0 60px rgba(132, 116, 245, 0.07);
             width: 100%;
             max-width: 420px;
-            border: 1px solid rgba(124, 58, 237, 0.22);
+            border: 1px solid rgba(132, 116, 245, 0.22);
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
         }
@@ -106,61 +106,61 @@
         }
 
         .login-logo .logo-icon {
-            width: min(220px, 80%);
+            width: min(300px, 90%);
             height: auto;
-            margin: 0 auto var(--space-md);
+            margin: 0 auto 0;
             display: block;
             object-fit: contain;
         }
 
-        .login-logo h1 {
-            position: relative;
-            display: inline-block;
-            font-family: 'Century Gothic', sans-serif;
-            font-size: clamp(30px, 4vw, 38px);
-            font-weight: 700;
-            letter-spacing: 0.8px;
-            color: transparent;
-            background: linear-gradient(110deg, #ffffff 0%, #ece9ff 18%, #7c3aed 40%, #a78bfa 62%, #ffffff 85%);
-            background-size: 260% auto;
-            -webkit-background-clip: text;
-            background-clip: text;
-            margin: 0 0 2px 0;
-            filter: drop-shadow(0 0 10px rgba(124, 58, 237, 0.28));
-            animation: logo-shimmer 5.5s linear infinite, logo-breathe 3.2s ease-in-out infinite;
-        }
-
-        .login-logo h1::before,
-        .login-logo h1::after {
-            content: attr(data-text);
+        .login-info-btn {
             position: absolute;
-            inset: 0;
-            pointer-events: none;
-            opacity: 0.55;
-            mix-blend-mode: screen;
+            bottom: 14px;
+            right: 14px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 1px solid rgba(132, 116, 245, 0.3);
+            background: transparent;
+            color: var(--color-text-muted);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: default;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
         }
 
-        .login-logo h1::before {
-            color: rgba(80, 205, 255, 0.75);
-            transform: translate(1px, 0);
-            animation: logo-rgb-left 2.7s ease-in-out infinite;
-        }
-
-        .login-logo h1::after {
-            color: rgba(255, 110, 240, 0.75);
-            transform: translate(-1px, 0);
-            animation: logo-rgb-right 2.7s ease-in-out infinite;
-        }
-
-        .login-logo .brand-accent {
-            color: var(--color-accent);
-        }
-
-        .login-logo p {
+        .login-info-btn::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: calc(100% + 8px);
+            right: 0;
+            background: rgba(15, 15, 22, 0.96);
+            border: 1px solid rgba(132, 116, 245, 0.2);
             color: var(--color-text-secondary);
-            margin: var(--space-sm) 0 0 0;
-            font-size: 14px;
+            font-size: 11px;
+            font-weight: 400;
+            white-space: nowrap;
+            padding: 5px 10px;
+            border-radius: 6px;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(4px);
+            transition: opacity 0.15s ease, transform 0.15s ease;
         }
+
+        .login-info-btn:hover {
+            color: var(--color-text-secondary);
+            border-color: rgba(132, 116, 245, 0.55);
+        }
+
+        .login-info-btn:hover::after {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
 
         .form-group {
             margin-bottom: var(--space-lg);
@@ -191,7 +191,7 @@
             outline: none;
             border-color: var(--color-accent);
             background: var(--color-bg-hover);
-            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12), 0 0 10px rgba(124, 58, 237, 0.08);
+            box-shadow: 0 0 0 3px rgba(132, 116, 245, 0.12), 0 0 10px rgba(132, 116, 245, 0.08);
         }
 
         .form-group input::placeholder {
@@ -227,7 +227,7 @@
         .btn-login {
             width: 100%;
             padding: 14px;
-            background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 60%, #9161f5 100%);
+            background: linear-gradient(135deg, #8474f5 0%, #4f43b8 60%, #9d8ef8 100%);
             background-size: 200% 100%;
             color: white;
             border: none;
@@ -237,14 +237,14 @@
             font-family: 'Outfit', sans-serif;
             cursor: pointer;
             transition: all 0.25s;
-            box-shadow: 0 2px 16px rgba(124, 58, 237, 0.25);
+            box-shadow: 0 2px 16px rgba(132, 116, 245, 0.25);
             letter-spacing: 0.02em;
         }
 
         .btn-login:hover {
             background-position: right center;
             transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(124, 58, 237, 0.4);
+            box-shadow: 0 6px 24px rgba(132, 116, 245, 0.4);
         }
 
         .btn-login:active {
@@ -296,14 +296,14 @@
         }
 
         .auth-mode-btn.active {
-            background: linear-gradient(135deg, rgba(124, 58, 237, 0.7), rgba(91, 33, 182, 0.8));
+            background: linear-gradient(135deg, rgba(132, 116, 245, 0.7), rgba(79, 67, 184, 0.8));
             color: #fff;
-            box-shadow: 0 2px 10px rgba(124, 58, 237, 0.25);
+            box-shadow: 0 2px 10px rgba(132, 116, 245, 0.25);
         }
 
         .quick-setup {
             margin-top: var(--space-lg);
-            border: 1px solid rgba(124, 58, 237, 0.14);
+            border: 1px solid rgba(132, 116, 245, 0.14);
             border-radius: var(--radius-md);
             background: rgba(16, 16, 16, 0.7);
             padding: 14px;
@@ -356,62 +356,6 @@
             background: var(--color-bg-hover);
         }
 
-        @keyframes logo-shimmer {
-            0% {
-                background-position: 0% 50%;
-            }
-
-            100% {
-                background-position: 260% 50%;
-            }
-        }
-
-        @keyframes logo-breathe {
-            0%,
-            100% {
-                transform: translateY(0) scale(1);
-                text-shadow: 0 0 0 rgba(255, 255, 255, 0.2);
-            }
-
-            50% {
-                transform: translateY(-1px) scale(1.015);
-                text-shadow: 0 0 12px rgba(255, 255, 255, 0.35);
-            }
-        }
-
-        @keyframes logo-rgb-left {
-            0%,
-            100% {
-                transform: translate(0.8px, 0);
-                opacity: 0.3;
-            }
-
-            50% {
-                transform: translate(1.8px, -0.5px);
-                opacity: 0.5;
-            }
-        }
-
-        @keyframes logo-rgb-right {
-            0%,
-            100% {
-                transform: translate(-0.8px, 0);
-                opacity: 0.3;
-            }
-
-            50% {
-                transform: translate(-1.8px, 0.5px);
-                opacity: 0.5;
-            }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            .login-logo h1,
-            .login-logo h1::before,
-            .login-logo h1::after {
-                animation: none !important;
-            }
-        }
     </style>
 </head>
 
@@ -422,11 +366,9 @@
         <div class="login-orb login-orb--3"></div>
     </div>
     <div class="login-container">
-        <div class="login-box">
+        <div class="login-box" style="position:relative;">
             <div class="login-logo">
                 <img class="logo-icon" src="/img/LurkedTV.png" alt="LurkedTV logo">
-                <h1 data-text="LurkedTV">LurkedTV</h1>
-                <p id="login-subtitle">Sign in with Firebase to continue</p>
             </div>
 
             <div class="error-message" id="error-message"></div>
@@ -502,6 +444,7 @@
                     </div>
                 </div>
             </div>
+            <span class="login-info-btn" data-tip="Sign in with Firebase to continue">?</span>
         </div>
     </div>
     <script src="/js/api.js"></script>

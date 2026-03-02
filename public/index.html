@@ -78,7 +78,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon profile-icon-placeholder">
               <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
             </svg>
-            <img id="profile-avatar" class="profile-avatar hidden" alt="Profile avatar" loading="lazy">
+            <img id="profile-avatar" class="profile-avatar hidden" alt="Profile avatar">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="icon profile-chevron">
               <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
             </svg>
@@ -151,7 +151,6 @@
       <!-- Home (Dashboard) Page -->
       <div id="page-home" class="page active">
         <!-- Content will be rendered by HomePage.js -->
-        <div class="loading-state">Loading Dashboard...</div>
       </div>
 
       <!-- Global Search Page -->
@@ -235,7 +234,15 @@
               <div class="watch-overlay hidden" id="player-controls-overlay">
                 <!-- Top Bar -->
                 <div class="watch-top-bar live-header">
-                  <h2 class="watch-title-overlay" id="player-channel-name"></h2>
+                  <div class="player-channel-info">
+                    <h2 class="watch-title-overlay" id="player-channel-name"></h2>
+                    <p class="program-title" id="player-program-title"></p>
+                    <p class="program-time" id="player-program-time"></p>
+                  </div>
+                  <div class="player-up-next" id="player-up-next-section">
+                    <h4>Up Next</h4>
+                    <ul id="up-next-list"></ul>
+                  </div>
                   <div class="player-badges">
                     <div class="transcode-status hidden" id="player-transcode-status">Direct</div>
                     <div class="quality-badge hidden" id="player-quality-badge"></div>
@@ -337,18 +344,6 @@
               <div class="player-overlay" id="player-overlay">
                 <div class="overlay-content">
                   <p>Select a channel to start watching</p>
-                </div>
-              </div>
-              <!-- Now Playing Overlay -->
-              <div class="now-playing-overlay hidden" id="now-playing">
-                <div class="now-playing-info">
-                  <h3 class="channel-name">No channel selected</h3>
-                  <p class="program-title"></p>
-                  <p class="program-time"></p>
-                </div>
-                <div class="up-next">
-                  <h4>Up Next</h4>
-                  <ul id="up-next-list"></ul>
                 </div>
               </div>
             </div>
@@ -512,7 +507,7 @@
             <button class="tab" data-tab="player">Player</button>
             <button class="tab" data-tab="transcode">Transcoding</button>
             <button class="tab" data-tab="content">Manage Content</button>
-            <button class="tab" data-tab="users" id="users-tab" style="display:none;">Users</button>
+            <button class="tab" data-tab="users" id="users-tab" style="display:none;">Admin</button>
           </div>
 
           <!-- Sources Tab -->
@@ -1062,50 +1057,56 @@ Can increase server bandwidth and CPU usage.">?</button>
 
           <!-- Users Tab (Admin Only) -->
           <div id="tab-users" class="tab-content">
-            <div class="settings-section">
-              <h3>Discord Bot Monitor</h3>
-              <p class="hint">Monitor bot connectivity and configure runtime behavior.</p>
+            <div class="admin-subtabs" role="tablist" aria-label="Admin sections">
+              <button type="button" class="admin-subtab active" data-admin-tab="bot" role="tab" aria-selected="true">Discord Bot</button>
+              <button type="button" class="admin-subtab" data-admin-tab="users" role="tab" aria-selected="false">Users</button>
+            </div>
 
-              <div class="discord-bot-monitor-card">
-                <div class="discord-bot-monitor-grid">
-                  <div class="discord-bot-monitor-item">
-                    <span class="setting-label">Process Heartbeat</span>
-                    <span class="setting-hint" id="discord-bot-heartbeat-status">Unknown</span>
+            <div class="admin-subtab-content active" data-admin-panel="bot" role="tabpanel">
+              <div class="settings-section">
+                <h3>Discord Bot Monitor</h3>
+                <p class="hint">Monitor bot connectivity and configure runtime behavior.</p>
+
+                <div class="discord-bot-monitor-card">
+                  <div class="discord-bot-monitor-grid">
+                    <div class="discord-bot-monitor-item">
+                      <span class="setting-label">Process Heartbeat</span>
+                      <span class="setting-hint" id="discord-bot-heartbeat-status">Unknown</span>
+                    </div>
+                    <div class="discord-bot-monitor-item">
+                      <span class="setting-label">Uptime</span>
+                      <span class="setting-hint" id="discord-bot-uptime-status">Unknown</span>
+                    </div>
+                    <div class="discord-bot-monitor-item">
+                      <span class="setting-label">Bot Identity</span>
+                      <span class="setting-hint" id="discord-bot-identity-status">Unknown</span>
+                    </div>
+                    <div class="discord-bot-monitor-item">
+                      <span class="setting-label">Guild Connection</span>
+                      <span class="setting-hint" id="discord-bot-guild-status">Unknown</span>
+                    </div>
+                    <div class="discord-bot-monitor-item">
+                      <span class="setting-label">Admin Role Lookup</span>
+                      <span class="setting-hint" id="discord-bot-role-status">Unknown</span>
+                    </div>
                   </div>
-                  <div class="discord-bot-monitor-item">
-                    <span class="setting-label">Uptime</span>
-                    <span class="setting-hint" id="discord-bot-uptime-status">Unknown</span>
-                  </div>
-                  <div class="discord-bot-monitor-item">
-                    <span class="setting-label">Bot Identity</span>
-                    <span class="setting-hint" id="discord-bot-identity-status">Unknown</span>
-                  </div>
-                  <div class="discord-bot-monitor-item">
-                    <span class="setting-label">Guild Connection</span>
-                    <span class="setting-hint" id="discord-bot-guild-status">Unknown</span>
-                  </div>
-                  <div class="discord-bot-monitor-item">
-                    <span class="setting-label">Admin Role Lookup</span>
-                    <span class="setting-hint" id="discord-bot-role-status">Unknown</span>
+                  <div class="account-actions-row" style="margin-top: 8px;">
+                    <button class="btn btn-sm btn-secondary" id="discord-bot-refresh-btn">Refresh Status</button>
+                    <span class="hint" id="discord-bot-status-feedback"></span>
                   </div>
                 </div>
-                <div class="account-actions-row" style="margin-top: 8px;">
-                  <button class="btn btn-sm btn-secondary" id="discord-bot-refresh-btn">Refresh Status</button>
-                  <span class="hint" id="discord-bot-status-feedback"></span>
-                </div>
-              </div>
 
-              <div class="add-user-section">
-                <h4>Discord Bot Config</h4>
-                <form id="discord-bot-config-form" class="user-form">
-                  <div class="form-group">
-                    <label for="discord-bot-prefix">Command Prefix</label>
-                    <input type="text" id="discord-bot-prefix" class="form-input" maxlength="3" placeholder="!">
-                  </div>
-                  <div class="form-group">
-                    <label for="discord-bot-guild-id">Guild ID</label>
-                    <input type="text" id="discord-bot-guild-id" class="form-input" placeholder="Discord server ID">
-                  </div>
+                <div class="add-user-section">
+                  <h4>Discord Bot Config</h4>
+                  <form id="discord-bot-config-form" class="user-form">
+                    <div class="form-group">
+                      <label for="discord-bot-prefix">Command Prefix</label>
+                      <input type="text" id="discord-bot-prefix" class="form-input" maxlength="3" placeholder="!">
+                    </div>
+                    <div class="form-group">
+                      <label for="discord-bot-guild-id">Guild ID</label>
+                      <input type="text" id="discord-bot-guild-id" class="form-input" placeholder="Discord server ID">
+                    </div>
                     <div class="form-group">
                       <label for="discord-bot-admin-role-id">Admin Role ID</label>
                       <input type="text" id="discord-bot-admin-role-id" class="form-input" placeholder="Discord admin role ID">
@@ -1118,88 +1119,122 @@ Can increase server bandwidth and CPU usage.">?</button>
                       <label for="discord-bot-active-window-ms">Active Window (ms)</label>
                       <input type="number" id="discord-bot-active-window-ms" class="form-input" min="10000" step="1000">
                     </div>
-                  <div class="form-group">
-                    <label for="discord-bot-dedupe-window-ms">Dedupe Window (ms)</label>
-                    <input type="number" id="discord-bot-dedupe-window-ms" class="form-input" min="1000" step="1000">
-                  </div>
-                  <button type="submit" class="btn btn-primary">Save Bot Config</button>
-                </form>
+                    <div class="form-group">
+                      <label for="discord-bot-dedupe-window-ms">Dedupe Window (ms)</label>
+                      <input type="number" id="discord-bot-dedupe-window-ms" class="form-input" min="1000" step="1000">
+                    </div>
+                    <div class="form-group">
+                      <label for="discord-bot-rpc-text">Rich Presence Text</label>
+                      <input type="text" id="discord-bot-rpc-text" class="form-input" maxlength="128" placeholder="Watching LurkedTV">
+                    </div>
+                    <div class="form-group">
+                      <label for="discord-bot-rpc-image">Rich Presence Image URL</label>
+                      <input type="url" id="discord-bot-rpc-image" class="form-input" placeholder="https://example.com/image.png">
+                      <span class="hint">Large image shown in bot Rich Presence. Must be a public image URL.</span>
+                    </div>
+                    <div class="form-group">
+                      <label for="discord-bot-rpc-type">Rich Presence Type</label>
+                      <select id="discord-bot-rpc-type" class="form-input">
+                        <option value="watching">Watching</option>
+                        <option value="playing">Playing</option>
+                        <option value="listening">Listening</option>
+                        <option value="competing">Competing</option>
+                        <option value="streaming">Streaming</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label for="discord-bot-status">Bot Status</label>
+                      <select id="discord-bot-status" class="form-input">
+                        <option value="online">Online</option>
+                        <option value="idle">Idle</option>
+                        <option value="dnd">Do Not Disturb</option>
+                        <option value="invisible">Invisible</option>
+                      </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="justify-self: start;">Save Bot Config</button>
+                  </form>
+                </div>
               </div>
             </div>
 
-            <div class="settings-section">
-              <h3>User Management</h3>
-              <p class="hint">Manage user accounts and permissions</p>
+            <div class="admin-subtab-content" data-admin-panel="users" role="tabpanel">
+              <div class="settings-section">
+                <h3>Premium Management</h3>
+                <p class="hint">Grant or revoke premium access for existing users.</p>
 
-              <div class="user-list-container">
-                <table class="user-table">
-                  <thead>
-                    <tr>
-                      <th>Username</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Premium</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="user-list">
-                    <tr>
-                      <td colspan="6" class="hint">Loading users...</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div class="user-list-container">
+                  <table class="user-table">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Premium</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="premium-user-list">
+                      <tr>
+                        <td colspan="4" class="hint">Loading users...</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
-              <div class="add-user-section">
-                <h4>Add New User</h4>
-                <form id="add-user-form" class="user-form">
-                  <div class="form-group">
-                    <label for="new-username">Username</label>
-                    <input type="text" id="new-username" name="username" class="form-input" required>
-                  </div>
-                  <div class="form-group">
-                    <label for="new-password">Password</label>
-                    <input type="password" id="new-password" name="password" class="form-input" required minlength="6">
-                  </div>
-                  <div class="form-group">
-                    <label for="new-role">Role</label>
-                    <select id="new-role" name="role" class="form-input" required>
-                      <option value="viewer">Viewer</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </div>
-                  <div class="form-group" style="justify-content:flex-end;">
-                    <label for="new-premium" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                      <input type="checkbox" id="new-premium" name="premium">
-                      Grant Premium
-                    </label>
-                  </div>
-                  <button type="submit" class="btn btn-primary">Add User</button>
-                </form>
+              <div class="settings-section">
+                <h3>User Management</h3>
+                <p class="hint">Manage user accounts and permissions</p>
+
+                <div class="user-list-container">
+                  <table class="user-table">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Premium</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="user-list">
+                      <tr>
+                        <td colspan="6" class="hint">Loading users...</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
 
-            <div class="settings-section">
-              <h3>Premium Management</h3>
-              <p class="hint">Grant or revoke premium access for existing users.</p>
-
-              <div class="user-list-container">
-                <table class="user-table">
-                  <thead>
-                    <tr>
-                      <th>Username</th>
-                      <th>Email</th>
-                      <th>Premium</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="premium-user-list">
-                    <tr>
-                      <td colspan="4" class="hint">Loading users...</td>
-                    </tr>
-                  </tbody>
-                </table>
+              <div class="settings-section">
+                <h3>Add New User</h3>
+                <p class="hint">Create a new local user account.</p>
+                <div class="add-user-section">
+                  <form id="add-user-form" class="user-form">
+                    <div class="form-group">
+                      <label for="new-username">Username</label>
+                      <input type="text" id="new-username" name="username" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                      <label for="new-password">Password</label>
+                      <input type="password" id="new-password" name="password" class="form-input" required minlength="6">
+                    </div>
+                    <div class="form-group">
+                      <label for="new-role">Role</label>
+                      <select id="new-role" name="role" class="form-input" required>
+                        <option value="viewer">Viewer</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </div>
+                    <div class="form-group" style="justify-content:flex-end;">
+                      <label for="new-premium" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="new-premium" name="premium">
+                        Grant Premium
+                      </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add User</button>
+                  </form>
+                </div>
               </div>
             </div>
           </div>

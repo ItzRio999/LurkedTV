@@ -104,7 +104,11 @@ function getDefaultSettings() {
     discordAdminRoleId: '1356477545989799990',
     discordLogChannelId: '',
     discordActiveWindowMs: 300000,
-    discordCommandDedupeWindowMs: 15000
+    discordCommandDedupeWindowMs: 15000,
+    discordRpcText: 'Watching LurkedTV',
+    discordRpcImage: '',
+    discordRpcType: 'watching',
+    discordBotStatus: 'online'
   };
 }
 

@@ -11,6 +11,7 @@ class SettingsPage {
         this.settingsRealtimeTimer = null;
         this.settingsRealtimeInFlight = false;
         this.discordBotConfigLoaded = false;
+        this.currentAdminSubtab = 'bot';
         this.lastUserListHash = '';
         this.lastPremiumUserListHash = '';
 
@@ -32,12 +33,42 @@ class SettingsPage {
         // User management (admin only)
         this.initUserManagement();
         this.initDiscordBotAdmin();
+        this.initAdminSubtabs();
 
         // Firebase media cache controls
         this.initFirebaseCacheControls();
 
         // Account settings for all users
         this.initAccountSettings();
+    }
+
+    initAdminSubtabs() {
+        const subtabButtons = document.querySelectorAll('#tab-users .admin-subtab');
+        subtabButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                this.switchAdminSubtab(btn.dataset.adminTab || 'bot');
+            });
+        });
+        this.switchAdminSubtab(this.currentAdminSubtab);
+    }
+
+    switchAdminSubtab(name = 'bot') {
+        const target = String(name || 'bot').trim().toLowerCase();
+        const valid = new Set(['bot', 'users']);
+        const active = valid.has(target) ? target : 'bot';
+        this.currentAdminSubtab = active;
+
+        const subtabButtons = document.querySelectorAll('#tab-users .admin-subtab');
+        subtabButtons.forEach((btn) => {
+            const isActive = (btn.dataset.adminTab || '') === active;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        const subtabPanels = document.querySelectorAll('#tab-users .admin-subtab-content');
+        subtabPanels.forEach((panel) => {
+            panel.classList.toggle('active', panel.dataset.adminPanel === active);
+        });
     }
 
     initDiscordBotAdmin() {
@@ -60,7 +91,11 @@ class SettingsPage {
                 adminRoleId: document.getElementById('discord-bot-admin-role-id')?.value || '',
                 logChannelId: document.getElementById('discord-bot-log-channel-id')?.value || '',
                 activeWindowMs: Number(document.getElementById('discord-bot-active-window-ms')?.value || 300000),
-                commandDedupeWindowMs: Number(document.getElementById('discord-bot-dedupe-window-ms')?.value || 15000)
+                commandDedupeWindowMs: Number(document.getElementById('discord-bot-dedupe-window-ms')?.value || 15000),
+                rpcText: document.getElementById('discord-bot-rpc-text')?.value || 'Watching LurkedTV',
+                rpcImage: document.getElementById('discord-bot-rpc-image')?.value || '',
+                rpcType: document.getElementById('discord-bot-rpc-type')?.value || 'watching',
+                botStatus: document.getElementById('discord-bot-status')?.value || 'online'
             };
 
             try {
@@ -130,12 +165,20 @@ class SettingsPage {
                 const logChannelInput = document.getElementById('discord-bot-log-channel-id');
                 const activeInput = document.getElementById('discord-bot-active-window-ms');
                 const dedupeInput = document.getElementById('discord-bot-dedupe-window-ms');
+                const rpcTextInput = document.getElementById('discord-bot-rpc-text');
+                const rpcImageInput = document.getElementById('discord-bot-rpc-image');
+                const rpcTypeInput = document.getElementById('discord-bot-rpc-type');
+                const statusInput = document.getElementById('discord-bot-status');
                 if (prefixInput) prefixInput.value = config.prefix || '!';
                 if (guildInput) guildInput.value = config.guildId || '';
                 if (roleInput) roleInput.value = config.adminRoleId || '';
                 if (logChannelInput) logChannelInput.value = config.logChannelId || '';
                 if (activeInput) activeInput.value = Number(config.activeWindowMs || 300000);
                 if (dedupeInput) dedupeInput.value = Number(config.commandDedupeWindowMs || 15000);
+                if (rpcTextInput) rpcTextInput.value = config.rpcText || 'Watching LurkedTV';
+                if (rpcImageInput) rpcImageInput.value = config.rpcImage || '';
+                if (rpcTypeInput) rpcTypeInput.value = config.rpcType || 'watching';
+                if (statusInput) statusInput.value = config.botStatus || 'online';
                 this.discordBotConfigLoaded = true;
             }
 
@@ -185,7 +228,7 @@ class SettingsPage {
             );
 
             if (feedback) {
-                feedback.textContent = `Config prefix ${config.prefix || '!'} | Guild ${config.guildId || 'unset'} | Role ${config.adminRoleId || 'unset'} | Log channel ${config.logChannelId || 'unset'}`;
+                feedback.textContent = `Config prefix ${config.prefix || '!'} | RPC ${config.rpcType || 'watching'} ${config.rpcText || 'Watching LurkedTV'} | Status ${config.botStatus || 'online'}`;
             }
         } catch (err) {
             console.error('Failed to load Discord bot status:', err);
@@ -1274,6 +1317,7 @@ async loadHardwareInfo() {
 
         // Load users when switching to users tab
         if (tabName === 'users') {
+            this.switchAdminSubtab(this.currentAdminSubtab);
             this.app.withGlobalLoading(
                 () => this.loadUsers(),
                 'Loading users...'
@@ -1427,4 +1471,3 @@ async loadHardwareInfo() {
 }
 
 window.SettingsPage = SettingsPage;
-

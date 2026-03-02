@@ -1,5 +1,5 @@
 require('dotenv').config({ quiet: true });
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ActivityType } = require('discord.js');
 const fs = require('fs/promises');
 const path = require('path');
 
@@ -13,6 +13,10 @@ const NODECAST_EMAIL = process.env.NODECAST_EMAIL || '';
 const NODECAST_PASSWORD = process.env.NODECAST_PASSWORD || '';
 const NODECAST_DISCORD_AUTH_SECRET = process.env.NODECAST_DISCORD_AUTH_SECRET || '';
 let commandDedupeWindowMs = Number(process.env.DISCORD_COMMAND_DEDUPE_WINDOW_MS || 15000);
+const DISCORD_BOT_RPC_TEXT = String(process.env.DISCORD_BOT_RPC_TEXT || 'Watching LurkedTV').trim();
+const DISCORD_BOT_RPC_IMAGE = String(process.env.DISCORD_BOT_RPC_IMAGE || '').trim();
+const DISCORD_BOT_RPC_TYPE = String(process.env.DISCORD_BOT_RPC_TYPE || 'watching').trim().toLowerCase();
+const DISCORD_BOT_STATUS = String(process.env.DISCORD_BOT_STATUS || 'online').trim().toLowerCase();
 const TARGET_GUILD_ID = String(
     process.env.DISCORD_GUILD_ID ||
     process.env.DISCORD_SERVER_ID ||
@@ -52,6 +56,52 @@ const EMOJI = {
     clock:     '🕐',
     gear:      '⚙️',
 };
+
+function normalizeRpcType(value) {
+    const type = String(value || '').trim().toLowerCase();
+    if (type === 'playing') return ActivityType.Playing;
+    if (type === 'listening') return ActivityType.Listening;
+    if (type === 'watching') return ActivityType.Watching;
+    if (type === 'competing') return ActivityType.Competing;
+    if (type === 'streaming') return ActivityType.Streaming;
+    return ActivityType.Watching;
+}
+
+function formatRpcType(type) {
+    if (type === ActivityType.Playing) return 'playing';
+    if (type === ActivityType.Listening) return 'listening';
+    if (type === ActivityType.Watching) return 'watching';
+    if (type === ActivityType.Competing) return 'competing';
+    if (type === ActivityType.Streaming) return 'streaming';
+    return 'watching';
+}
+
+function normalizePresenceStatus(value) {
+    const status = String(value || '').trim().toLowerCase();
+    if (status === 'online' || status === 'idle' || status === 'dnd' || status === 'invisible') return status;
+    return 'online';
+}
+
+let rpcState = {
+    text: DISCORD_BOT_RPC_TEXT || 'Watching LurkedTV',
+    image: DISCORD_BOT_RPC_IMAGE || '',
+    type: normalizeRpcType(DISCORD_BOT_RPC_TYPE),
+    status: normalizePresenceStatus(DISCORD_BOT_STATUS),
+};
+
+function applyBotPresence() {
+    if (!client?.user) return;
+    const name = sanitizeEmbedText(rpcState.text, 'Watching LurkedTV').slice(0, 128);
+    const type = rpcState.type;
+    const activity = { name, type };
+    // Discord requires a URL for streaming activity.
+    if (type === ActivityType.Streaming) activity.url = 'https://www.twitch.tv/';
+    if (rpcState.image) activity.largeImageURL = rpcState.image;
+    client.user.setPresence({
+        status: rpcState.status,
+        activities: [activity],
+    });
+}
 
 function parseUserTokenMap(raw) {
     if (!raw) return {};
@@ -1050,6 +1100,11 @@ function buildHelpEmbed() {
                 inline: false,
             },
             {
+                name: `${EMOJI.gear} \`${prefix}rpc [type] [text]\``,
+                value: `Set bot Rich Presence (admin). Use \`${prefix}rpc\` to view, \`${prefix}rpc off\` to disable.\nTypes: playing, listening, watching, competing, streaming`,
+                inline: false,
+            },
+            {
                 name: `${EMOJI.ping} \`${prefix}ping\``,
                 value: `Check bot response latency.\nAliases: \`${prefix}latency\``,
                 inline: false,
@@ -1576,6 +1631,121 @@ async function handlePrefixCommand(message, rawNewPrefix) {
     });
 }
 
+function isDiscordGuildAdmin(message) {
+    return Boolean(
+        message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+        message.member?.permissions?.has(PermissionsBitField.Flags.ManageGuild)
+    );
+}
+
+async function handleRpcCommand(message, rawArgs) {
+    if (!isDiscordGuildAdmin(message)) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.error} Permission Required`,
+                    description: 'You need **Administrator** or **Manage Server** permission to run this command.',
+                    color: COLORS.error,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const input = String(rawArgs || '').trim();
+    if (!input) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.gear} Bot Rich Presence`,
+                    description: [
+                        `Type: \`${formatRpcType(rpcState.type)}\``,
+                        `Text: \`${sanitizeEmbedText(rpcState.text, 'Watching LurkedTV')}\``,
+                        `Status: \`${rpcState.status}\``,
+                        '',
+                        `Set: \`${prefix}rpc watching Live TV\``,
+                        `Off: \`${prefix}rpc off\``,
+                        `Status only: \`${prefix}rpc status idle\``,
+                    ].join('\n'),
+                    color: COLORS.info,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const parts = input.split(/\s+/);
+    const first = String(parts[0] || '').toLowerCase();
+
+    if (first === 'off' || first === 'clear' || first === 'disable') {
+        rpcState.text = 'Watching LurkedTV';
+        rpcState.type = ActivityType.Watching;
+        client.user?.setPresence({ status: rpcState.status, activities: [] });
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.success} Rich Presence Cleared`,
+                    description: 'Bot activity text is now disabled.',
+                    color: COLORS.success,
+                }),
+            ],
+        });
+        return;
+    }
+
+    if (first === 'status') {
+        const requestedStatus = normalizePresenceStatus(parts[1]);
+        rpcState.status = requestedStatus;
+        applyBotPresence();
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.success} Presence Status Updated`,
+                    description: `Status set to \`${requestedStatus}\`.`,
+                    color: COLORS.success,
+                }),
+            ],
+        });
+        return;
+    }
+
+    const validTypes = new Set(['playing', 'listening', 'watching', 'competing', 'streaming']);
+    let requestedType = formatRpcType(rpcState.type);
+    let textParts = parts;
+    if (validTypes.has(first)) {
+        requestedType = first;
+        textParts = parts.slice(1);
+    }
+
+    const requestedText = sanitizeEmbedText(textParts.join(' '), '');
+    if (!requestedText) {
+        await message.reply({
+            embeds: [
+                buildEmbed({
+                    title: `${EMOJI.warning} Missing Presence Text`,
+                    description: `Usage: \`${prefix}rpc [type] <text>\``,
+                    color: COLORS.warning,
+                }),
+            ],
+        });
+        return;
+    }
+
+    rpcState.type = normalizeRpcType(requestedType);
+    rpcState.text = requestedText.slice(0, 128);
+    applyBotPresence();
+
+    await message.reply({
+        embeds: [
+            buildEmbed({
+                title: `${EMOJI.success} Rich Presence Updated`,
+                description: `Set to \`${formatRpcType(rpcState.type)} ${rpcState.text}\`.`,
+                color: COLORS.success,
+            }),
+        ],
+    });
+}
+
 function parseDiscordMentionUserId(value) {
     const raw = sanitizeEmbedText(value, '');
     const match = raw.match(/^<@!?(\d+)>$/);
@@ -1767,6 +1937,19 @@ async function syncRuntimeConfigFromServer() {
         if (typeof body.prefix === 'string' && body.prefix.trim()) prefix = body.prefix.trim().slice(0, 3);
         if (Number.isFinite(Number(body.activeWindowMs))) activeWindowMs = Number(body.activeWindowMs);
         if (Number.isFinite(Number(body.commandDedupeWindowMs))) commandDedupeWindowMs = Number(body.commandDedupeWindowMs);
+        const nextRpcText = sanitizeEmbedText(body.rpcText, rpcState.text).slice(0, 128);
+        const nextRpcImage = typeof body.rpcImage === 'string' ? body.rpcImage : rpcState.image;
+        const nextRpcType = normalizeRpcType(body.rpcType);
+        const nextBotStatus = normalizePresenceStatus(body.botStatus);
+        const changed =
+            nextRpcText !== rpcState.text ||
+            nextRpcImage !== rpcState.image ||
+            nextRpcType !== rpcState.type ||
+            nextBotStatus !== rpcState.status;
+        if (changed) {
+            rpcState = { text: nextRpcText, image: nextRpcImage, type: nextRpcType, status: nextBotStatus };
+            applyBotPresence();
+        }
     } catch (_) {}
 }
 
@@ -1815,6 +1998,7 @@ client.once('clientReady', async () => {
         console.warn(`[DiscordBot] Guild fetch error: ${err.message}`);
     }
 
+    applyBotPresence();
     await syncRuntimeConfigFromServer();
     await sendHeartbeat();
     setInterval(() => { syncRuntimeConfigFromServer(); sendHeartbeat(); }, 30_000);
@@ -1835,6 +2019,7 @@ client.on('messageCreate', async (message) => {
         'mwreset', 'resetmw', 'mwclear',
         'clear',
         'prefix', 'setprefix',
+        'rpc', 'setrpc',
         'makeadmin', 'addadmin', 'promoteadmin',
         'makepremium', 'addpremium', 'mp',
         'revokepremium', 'removepremium', 'rmp', 'unpremium',
@@ -1842,9 +2027,20 @@ client.on('messageCreate', async (message) => {
         'help', 'commands', 'cmds',
         '',
     ]);
+    const commandsRequiringLinkedAccount = new Set([
+        'download',
+        'status', 'nowplaying',
+        'recent', 'history',
+        'refresh', 'sync', 'resync',
+        'mustwatch', 'must-watch', 'mw',
+        'mwreset', 'resetmw', 'mwclear',
+        'makeadmin', 'addadmin', 'promoteadmin',
+        'makepremium', 'addpremium', 'mp',
+        'revokepremium', 'removepremium', 'rmp', 'unpremium',
+    ]);
 
     try {
-        if (knownCommands.has(command)) {
+        if (commandsRequiringLinkedAccount.has(command)) {
             const linkedToken = await getNodecastTokenFromDiscordLink(message.author.id);
             if (!linkedToken) {
                 await message.reply({ embeds: [buildDiscordLinkRequiredEmbed()] });
@@ -1860,6 +2056,7 @@ client.on('messageCreate', async (message) => {
         if (command === 'mwreset' || command === 'resetmw' || command === 'mwclear') { await handleMustWatchResetCommand(message); return; }
         if (command === 'clear') { await handleClearCommand(message, args[0]); return; }
         if (command === 'prefix' || command === 'setprefix') { await handlePrefixCommand(message, args[0]); return; }
+        if (command === 'rpc' || command === 'setrpc') { await handleRpcCommand(message, args.join(' ')); return; }
         if (command === 'makeadmin' || command === 'addadmin' || command === 'promoteadmin') {
             await handleMakeAdminCommand(message, args.join(' '));
             return;
